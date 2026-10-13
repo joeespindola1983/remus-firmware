@@ -19,8 +19,8 @@ Validated on 2026-10-13 (macOS arm64):
 | ESP-IDF | 5.5.3 (`framework-espidf` 3.50503.0) |
 | RISC-V toolchain | 14.2.0+20251107 |
 | `riscv32-esp-elf-g++` SHA-256 | `ba2d11db6e6d13cd80517f43d98133c3ea69828b866a91cc402e34e1a4c319eb` |
-| Blade M2 build | PASS; RAM 57,148 B; app image 758,814 B |
-| Computer M2 build | PASS; RAM 79,836 B; app image 872,320 B (radio + SD diagnostics) |
+| Blade M2 clean build | PASS; RAM 57,620 B; app image 782,512 B |
+| Computer M2 clean build | PASS; RAM 80,300 B; app image 890,400 B (radio + SD diagnostics) |
 | Host CTest | PASS; 6/6 tests, including codec, registry, state, scheduler, supervisor, and log cases |
 | Standalone `idf.py` build | INCONCLUSIVE; no standalone ESP-IDF shell was installed on this host |
 
