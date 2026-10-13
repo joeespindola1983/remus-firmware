@@ -24,6 +24,11 @@ make computer
 make all
 ```
 
+The ESP32-C3 native USB Serial/JTAG interface is the primary console for both
+targets. When `sdkconfig.defaults` changes, remove the generated
+`firmware/<target>/sdkconfig.<environment>` file before rebuilding so ESP-IDF
+regenerates the effective configuration.
+
 Native ESP-IDF builds are supported when an ESP-IDF 5.5.3 environment is
 active:
 
