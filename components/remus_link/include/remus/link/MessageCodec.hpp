@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 
@@ -12,6 +13,11 @@ constexpr std::size_t kHelloPayloadBytes = 44;
 constexpr std::size_t kBindPayloadBytes = 32;
 constexpr std::size_t kBindAckPayloadBytes = 32;
 constexpr std::size_t kSourceManifestPayloadBytes = 32;
+constexpr std::size_t kDataBatchPrefixBytes = 16;
+constexpr std::size_t kDataBatchSampleBytes = 16;
+constexpr std::size_t kMaximumDataBatchSamples = 10;
+constexpr std::size_t kMaximumDataBatchPayloadBytes =
+    kDataBatchPrefixBytes + kMaximumDataBatchSamples * kDataBatchSampleBytes;
 
 struct Beacon {
   ComputerId computerId{0};
@@ -63,6 +69,23 @@ struct SourceManifest {
   std::uint16_t lsbPerG{0};
   std::uint16_t lsbPerDpsX10{0};
 };
+struct DataBatchSample {
+  std::uint16_t deltaTicks10us{0};
+  std::int16_t ax{0};
+  std::int16_t ay{0};
+  std::int16_t az{0};
+  std::int16_t gx{0};
+  std::int16_t gy{0};
+  std::int16_t gz{0};
+  std::uint16_t flags{0};
+};
+struct DataBatch {
+  SampleIndex firstSampleIndex{0};
+  std::uint32_t batchSeq{0};
+  std::uint16_t sampleCount{0};
+  std::uint16_t nominalPeriodUs{0};
+  std::array<DataBatchSample, kMaximumDataBatchSamples> samples{};
+};
 
 class MessageCodec {
  public:
@@ -73,6 +96,7 @@ class MessageCodec {
   static Status encode(const Bind&, std::uint8_t*, std::size_t, std::size_t&) noexcept;
   static Status encode(const BindAck&, std::uint8_t*, std::size_t, std::size_t&) noexcept;
   static Status encode(const SourceManifest&, std::uint8_t*, std::size_t, std::size_t&) noexcept;
+  static Status encode(const DataBatch&, std::uint8_t*, std::size_t, std::size_t&) noexcept;
   // Decode methods require the exact normative payload length and zero-valued
   // reserved bytes. Callers use the result only when Status::ok().
   static Status decode(const std::uint8_t*, std::size_t, Beacon&) noexcept;
@@ -80,5 +104,6 @@ class MessageCodec {
   static Status decode(const std::uint8_t*, std::size_t, Bind&) noexcept;
   static Status decode(const std::uint8_t*, std::size_t, BindAck&) noexcept;
   static Status decode(const std::uint8_t*, std::size_t, SourceManifest&) noexcept;
+  static Status decode(const std::uint8_t*, std::size_t, DataBatch&) noexcept;
 };
 }  // namespace remus::link

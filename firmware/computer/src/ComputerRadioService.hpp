@@ -19,9 +19,10 @@
 namespace remus::computer {
 class ComputerRadioService final : public hal::IRadioEvents {
  public:
-  explicit ComputerRadioService(SdDiagnosticLogger* diagnosticLog) noexcept
-      : diagnosticLog_(diagnosticLog) {}
+  ComputerRadioService(SdDiagnosticLogger* diagnosticLog, RecordingId recordingId) noexcept
+      : diagnosticLog_(diagnosticLog), recordingId_(recordingId) {}
   Status start() noexcept;
+  RecordingId recordingId() const noexcept { return recordingId_; }
   void onRadioReceived(const hal::RadioRxMeta&, const std::uint8_t*, std::size_t) noexcept override;
   void onRadioSendComplete(const MacAddress&, bool) noexcept override;
   std::size_t sourceCount() const noexcept { return registry_.size(); }
@@ -41,7 +42,9 @@ class ComputerRadioService final : public hal::IRadioEvents {
   void run() noexcept;
   void handleReceive(const Event&) noexcept;
   void handleHello(const Event&, const link::DecodedFrame&) noexcept;
-  void handleBindAck(const Event&) noexcept;
+  void handlePaired(const Event&) noexcept;
+  void handleBindAck(link::SourceEntry&, const link::DecodedFrame&) noexcept;
+  void handleDataBatch(link::SourceEntry&, const Event&, const link::DecodedFrame&) noexcept;
   void sendBeacon() noexcept;
   void sendBind(link::SourceEntry&) noexcept;
   bool enqueue(const Event&) noexcept;
@@ -58,6 +61,17 @@ class ComputerRadioService final : public hal::IRadioEvents {
   ComputerId computerId_{0};
   DeviceBootId bootId_{0};
   NetworkId networkId_{0};
+  RecordingId recordingId_{0};
+  struct DataSinkStats {
+    BladeId bladeId{0};
+    DeviceBootId bladeBootId{0};
+    std::uint32_t nextBatchSeq{0};
+    SampleIndex nextSampleIndex{0};
+    std::uint64_t batches{0};
+    std::uint64_t samples{0};
+    std::uint32_t gaps{0};
+  };
+  std::array<DataSinkStats, link::SourceRegistry::capacity()> dataSinks_{};
   std::array<std::uint8_t, 32> secret_{};
   std::array<std::uint8_t, 32> groupKey_{};
   std::uint32_t beaconSeq_{0};

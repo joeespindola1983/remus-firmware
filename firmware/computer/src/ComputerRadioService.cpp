@@ -18,6 +18,7 @@ constexpr NativeTimestampUs kCandidateLifetimeUs = 10000000;
 }  // namespace
 
 Status ComputerRadioService::start() noexcept {
+  if (recordingId_ == 0) return Status::failure(Error::InvalidArgument);
   const esp_err_t nvs = nvs_flash_init();
   if (nvs != ESP_OK) return Status::failure(Error::NotReady, nvs);
   std::size_t secretSize = 0;
@@ -121,7 +122,7 @@ void ComputerRadioService::handleReceive(const Event& event) noexcept {
     handleHello(event, frame);
     return;
   }
-  handleBindAck(event);
+  handlePaired(event);
 }
 void ComputerRadioService::handleHello(const Event& event,
                                        const link::DecodedFrame& frame) noexcept {
@@ -156,7 +157,7 @@ void ComputerRadioService::handleHello(const Event& event,
 }
 void ComputerRadioService::sendBind(link::SourceEntry& source) noexcept {
   if (source.bindAttempts >= 3) return;
-  link::Bind bind{source.bladeId, source.bladeBootId, bootId_, 0, source.bindEpoch, 0};
+  link::Bind bind{source.bladeId, source.bladeBootId, bootId_, recordingId_, source.bindEpoch, 1};
   std::uint8_t payload[link::kBindPayloadBytes]{};
   std::size_t payloadSize = 0;
   if (!link::MessageCodec::encode(bind, payload, sizeof(payload), payloadSize).ok()) return;
@@ -165,7 +166,7 @@ void ComputerRadioService::sendBind(link::SourceEntry& source) noexcept {
                            networkId_,
                            computerId_,
                            bootId_,
-                           0,
+                           recordingId_,
                            ++messageSeq_,
                            static_cast<NativeTimestampUs>(esp_timer_get_time())};
   link::EncodedFrame frame{};
@@ -181,7 +182,7 @@ void ComputerRadioService::sendBind(link::SourceEntry& source) noexcept {
   const NativeTimestampUs backoffUs = 1000000ULL << (source.bindAttempts - 1U);
   source.nextBindAttemptUs = static_cast<NativeTimestampUs>(esp_timer_get_time()) + backoffUs;
 }
-void ComputerRadioService::handleBindAck(const Event& event) noexcept {
+void ComputerRadioService::handlePaired(const Event& event) noexcept {
   // MAC selects only an existing candidate. Identity and state are accepted only
   // after the complete frame has passed pair-key authentication below.
   auto* source = registry_.findByAddress(event.meta.source);
@@ -191,17 +192,85 @@ void ComputerRadioService::handleBindAck(const Event& event) noexcept {
            .decode(event.bytes, event.size, source->pairKeys.pairAuthKey.data(),
                    source->pairKeys.pairAuthKey.size(), clear)
            .ok() ||
-      clear.header.type != link::MessageType::BindAck || clear.header.networkId != networkId_)
+      clear.header.networkId != networkId_ || clear.header.senderId != source->bladeId ||
+      clear.header.senderBootId != source->bladeBootId)
     return;
+  if (clear.header.type == link::MessageType::BindAck)
+    handleBindAck(*source, clear);
+  else if (clear.header.type == link::MessageType::DataBatch)
+    handleDataBatch(*source, event, clear);
+}
+
+void ComputerRadioService::handleBindAck(link::SourceEntry& source,
+                                         const link::DecodedFrame& clear) noexcept {
   link::BindAck ack{};
   if (!link::MessageCodec::decode(clear.payload.data(), clear.payloadSize, ack).ok() ||
-      ack.bladeId != source->bladeId || ack.bladeBootId != source->bladeBootId ||
-      ack.pcBootId != bootId_ || ack.resultCode != 0 ||
-      !source->state.onBindAck(ack.bindEpoch).ok())
+      ack.bladeId != source.bladeId || ack.bladeBootId != source.bladeBootId ||
+      ack.pcBootId != bootId_ || ack.sessionId != recordingId_ || ack.resultCode != 0 ||
+      !source.state.onBindAck(ack.bindEpoch).ok())
     return;
   ESP_LOGI(kTag, "blade state=Bound boot=%lu sources=%u",
            static_cast<unsigned long>(ack.bladeBootId), static_cast<unsigned>(registry_.size()));
   log(DiagnosticLogLevel::Info, "blade_bound", "application_ack=true");
+}
+
+void ComputerRadioService::handleDataBatch(link::SourceEntry& source, const Event& event,
+                                           const link::DecodedFrame& clear) noexcept {
+  if (source.state.state() != link::ComputerPeerState::Bound ||
+      clear.header.recordingId != recordingId_)
+    return;
+  link::DataBatch batch{};
+  if (!link::MessageCodec::decode(clear.payload.data(), clear.payloadSize, batch).ok()) {
+    log(DiagnosticLogLevel::Warning, "data_batch_rejected", "reason=payload_invalid");
+    return;
+  }
+  DataSinkStats* sink = nullptr;
+  for (auto& candidate : dataSinks_) {
+    if ((candidate.bladeId == source.bladeId && candidate.bladeBootId == source.bladeBootId) ||
+        candidate.bladeId == 0) {
+      sink = &candidate;
+      break;
+    }
+  }
+  if (sink == nullptr) return;
+  if (sink->bladeId == 0) {
+    sink->bladeId = source.bladeId;
+    sink->bladeBootId = source.bladeBootId;
+    sink->nextBatchSeq = batch.batchSeq;
+    sink->nextSampleIndex = batch.firstSampleIndex;
+  }
+  if (batch.batchSeq != sink->nextBatchSeq || batch.firstSampleIndex != sink->nextSampleIndex) {
+    ++sink->gaps;
+    char details[192]{};
+    std::snprintf(details, sizeof(details),
+                  "blade_id=%llu expected_batch=%lu actual_batch=%lu expected_sample=%llu "
+                  "actual_sample=%llu",
+                  static_cast<unsigned long long>(source.bladeId),
+                  static_cast<unsigned long>(sink->nextBatchSeq),
+                  static_cast<unsigned long>(batch.batchSeq),
+                  static_cast<unsigned long long>(sink->nextSampleIndex),
+                  static_cast<unsigned long long>(batch.firstSampleIndex));
+    ESP_LOGW(kTag, "DATA gap %s", details);
+    log(DiagnosticLogLevel::Warning, "data_gap", details);
+  }
+  sink->nextBatchSeq = batch.batchSeq + 1;
+  sink->nextSampleIndex = batch.firstSampleIndex + batch.sampleCount;
+  ++sink->batches;
+  sink->samples += batch.sampleCount;
+  if (sink->batches % 20 == 0) {
+    char details[224]{};
+    std::snprintf(details, sizeof(details),
+                  "blade_id=%llu boot=%lu batches=%llu samples=%llu gaps=%lu rssi=%d "
+                  "last_batch=%lu",
+                  static_cast<unsigned long long>(source.bladeId),
+                  static_cast<unsigned long>(source.bladeBootId),
+                  static_cast<unsigned long long>(sink->batches),
+                  static_cast<unsigned long long>(sink->samples),
+                  static_cast<unsigned long>(sink->gaps), event.meta.rssiDbm,
+                  static_cast<unsigned long>(batch.batchSeq));
+    ESP_LOGI(kTag, "DATA sink %s", details);
+    log(DiagnosticLogLevel::Info, "data_sink", details);
+  }
 }
 void ComputerRadioService::sendBeacon() noexcept {
   link::Beacon beacon{computerId_, bootId_, 1, 0, ++beaconSeq_, 0};

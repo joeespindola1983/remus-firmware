@@ -56,4 +56,26 @@ physical flash capacity, GPIO safety, and idle/runtime RAM remain
 after power loss, and card-removal behavior also require bench evidence. The
 M2 H1/H2 association captures and physical eight-encrypted-peer capacity are
 still required; host tests alone do not prove RF behavior. MPU-6050 FIFO/DRDY
-jitter belongs to M3 and is not implemented here.
+jitter belongs to M3.
+
+## M3 software baseline — 2026-10-13
+
+The shared acquisition pipeline, MPU-6050 ESP-IDF driver, DATA_BATCH codec,
+Blade transmitter, remote Computer RAM sink, and local Computer IMU RAM sink
+are implemented on `feature/m3-imu-data`.
+
+| Item | Observed result |
+|---|---|
+| Host CTest | PASS; 8/8 tests |
+| DATA_BATCH maximum | PASS; 10 samples, 176-byte payload, 244-byte frame |
+| Blade clean build | PASS; RAM 63,444 B; app image 814,738 B before final log-only rebuild |
+| Blade final build | PASS; RAM 63,460 B; app image 815,080 B |
+| Computer clean build | PASS; RAM 86,100 B; app image 917,644 B before final metrics rebuild |
+| Computer final build | PASS; RAM 86,100 B; app image 918,088 B |
+
+The driver supports FIFO burst reads, overflow detection/reset and an optional
+DRDY ISR/task notification path. No DRDY GPIO is approved in the hardware
+profile yet, so both role services deliberately log `mode=software_timer` and
+measure actual read timestamps, missed periods and maximum observed jitter.
+Gate H3 remains pending: it requires the two physical Blades, confirmed
+role-specific GPIO/DRDY wiring, 20-minute captures and measured loss/jitter.

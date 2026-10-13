@@ -1,10 +1,12 @@
 #include <cstdio>
 
+#include "ComputerAcquisitionService.hpp"
 #include "ComputerRadioService.hpp"
 #include "ComputerRuntime.hpp"
 #include "SdDiagnosticLogger.hpp"
 #include "esp_app_desc.h"
 #include "esp_log.h"
+#include "esp_random.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -16,9 +18,18 @@ constexpr TickType_t kHealthLogInterval = pdMS_TO_TICKS(5000);
 }  // namespace
 
 extern "C" void app_main(void) {
+  remus::RecordingId recordingId =
+      (static_cast<remus::RecordingId>(esp_random()) << 32) | esp_random();
+  if (recordingId == 0) recordingId = 1;
   static remus::computer::ComputerRuntime runtime;
   static remus::computer::SdDiagnosticLogger sdLogger;
-  static remus::computer::ComputerRadioService radioService(&sdLogger);
+  static remus::computer::ComputerRadioService radioService(&sdLogger, recordingId);
+  // This is an independent Computer role profile; the provisional values come
+  // from HARDWARE_PROFILES.md and can diverge from the Blade without touching
+  // the shared driver or acquisition pipeline.
+  static constexpr remus::platform::esp32::Mpu6050Config computerImu{
+      GPIO_NUM_6, GPIO_NUM_5, GPIO_NUM_NC, 0x68, 400000};
+  static remus::computer::ComputerAcquisitionService acquisitionService(computerImu);
   const remus::Status sdStatus = sdLogger.start();
   if (!sdStatus.ok()) {
     ESP_LOGE(kLogTag, "SD diagnostic log unavailable: error=%u detail=%lu",
@@ -57,6 +68,13 @@ extern "C" void app_main(void) {
     sdLogger.enqueue(remus::computer::DiagnosticLogLevel::Info, "runtime_ready", "role=computer");
   }
 
+  const remus::Status acquisitionStatus = acquisitionService.start(recordingId);
+  if (!acquisitionStatus.ok()) {
+    ESP_LOGE(kLogTag, "local IMU unavailable: error=%u detail=%lu; system remains operational",
+             static_cast<unsigned>(acquisitionStatus.error),
+             static_cast<unsigned long>(acquisitionStatus.detail));
+  }
+
   const remus::Status radioStatus = radioService.start();
   if (!radioStatus.ok()) {
     ESP_LOGE(kLogTag, "radio unavailable: error=%u detail=%lu; provision remus NVS credentials",
@@ -71,13 +89,15 @@ extern "C" void app_main(void) {
 
   for (;;) {
     const remus::diagnostics::HealthSnapshot health = runtime.healthSnapshot();
+    const remus::acquisition::SamplingMetrics imu = acquisitionService.metrics();
     const remus::computer::SdDiagnosticLoggerStats sdLogStats = sdLogger.stats();
-    char healthDetails[320]{};
+    char healthDetails[384]{};
     std::snprintf(healthDetails, sizeof(healthDetails),
                   "uptime_ms=%llu runtime_starts=%lu queue_overflows=%lu pool_exhaustions=%lu "
                   "invalid_handle_releases=%lu free_heap=%lu minimum_free_heap=%lu "
                   "sd_log_queued=%lu sd_log_dropped=%lu sd_log_write_failures=%lu "
-                  "sd_log_rotations=%lu",
+                  "sd_log_rotations=%lu imu_attempts=%llu imu_valid=%llu imu_errors=%llu "
+                  "imu_missed=%llu imu_max_jitter_us=%llu local_batches=%llu",
                   static_cast<unsigned long long>(esp_timer_get_time() / 1000),
                   static_cast<unsigned long>(health.runtimeStarts),
                   static_cast<unsigned long>(health.queueOverflows),
@@ -88,7 +108,13 @@ extern "C" void app_main(void) {
                   static_cast<unsigned long>(sdLogStats.queued),
                   static_cast<unsigned long>(sdLogStats.dropped),
                   static_cast<unsigned long>(sdLogStats.writeFailures),
-                  static_cast<unsigned long>(sdLogStats.rotations));
+                  static_cast<unsigned long>(sdLogStats.rotations),
+                  static_cast<unsigned long long>(imu.attempts),
+                  static_cast<unsigned long long>(imu.validSamples),
+                  static_cast<unsigned long long>(imu.readErrors),
+                  static_cast<unsigned long long>(imu.missedPeriods),
+                  static_cast<unsigned long long>(imu.maxAbsJitterUs),
+                  static_cast<unsigned long long>(acquisitionService.batchCount()));
     ESP_LOGI(kLogTag, "health %s", healthDetails);
     if (sdLogger.isReady() &&
         !sdLogger.enqueue(remus::computer::DiagnosticLogLevel::Info, "health", healthDetails)) {

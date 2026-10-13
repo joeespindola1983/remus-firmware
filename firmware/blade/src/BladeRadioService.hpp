@@ -9,6 +9,7 @@
 #include "remus/link/BladeLinkStateMachine.hpp"
 #include "remus/link/FrameCodec.hpp"
 #include "remus/link/KeyDerivation.hpp"
+#include "remus/link/MessageCodec.hpp"
 #include "remus/link/RadioSupervisor.hpp"
 #include "remus/link/TxScheduler.hpp"
 #include "remus/platform/esp32/EspNowDriver.hpp"
@@ -16,30 +17,37 @@
 #include "remus/platform/esp32/NvsCredentials.hpp"
 
 namespace remus::blade {
+class BladeAcquisitionService;
 class BladeRadioService final : public hal::IRadioEvents {
  public:
   Status start() noexcept;
+  void setAcquisitionService(BladeAcquisitionService* service) noexcept { acquisition_ = service; }
+  Status queueDataBatch(RecordingId, NativeTimestampUs, const link::DataBatch&) noexcept;
   void onRadioReceived(const hal::RadioRxMeta&, const std::uint8_t*, std::size_t) noexcept override;
   void onRadioSendComplete(const MacAddress&, bool) noexcept override;
   link::BladeLinkState state() const noexcept { return state_.state(); }
 
  private:
-  enum class EventKind : std::uint8_t { Receive, SendComplete };
+  enum class EventKind : std::uint8_t { Receive, SendComplete, DataBatch };
   struct Event {
     EventKind kind{};
     hal::RadioRxMeta meta{};
     MacAddress destination{};
     std::uint16_t size{};
     bool delivered{};
+    RecordingId recordingId{};
+    NativeTimestampUs originMonoUs{};
     std::uint8_t bytes[250]{};
   };
   static void taskEntry(void*) noexcept;
   void run() noexcept;
   void handleReceive(const Event&) noexcept;
   void sendHello() noexcept;
+  void sendDataBatch(const Event&) noexcept;
   bool enqueue(const Event&) noexcept;
   static constexpr std::size_t kQueueCapacity = 16;
   platform::esp32::MbedTlsCrypto crypto_{};
+  BladeAcquisitionService* acquisition_{nullptr};
   platform::esp32::NvsCredentials credentials_{};
   platform::esp32::EspNowDriver radio_{};
   link::FrameCodec codec_{crypto_};

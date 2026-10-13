@@ -91,3 +91,27 @@ add_executable(test_link_state unit/test_link_state.cpp)
 target_link_libraries(test_link_state PRIVATE remus_link remus_hal)
 target_compile_options(test_link_state PRIVATE -Wall -Wextra -Wpedantic -Werror)
 add_test(NAME link_state COMMAND test_link_state)
+
+add_library(remus_acquisition STATIC
+  "${REPO_ROOT}/components/remus_acquisition/src/AcquisitionPipeline.cpp"
+  "${REPO_ROOT}/components/remus_acquisition/src/BatchBuilder.cpp"
+  "${REPO_ROOT}/components/remus_acquisition/src/Sampler.cpp"
+  "${REPO_ROOT}/components/remus_acquisition/src/SampleClock.cpp"
+)
+target_include_directories(remus_acquisition PUBLIC
+  "${REPO_ROOT}/components/remus_acquisition/include"
+)
+target_link_libraries(remus_acquisition PUBLIC remus_hal)
+target_compile_options(remus_acquisition PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
+add_executable(test_acquisition unit/test_acquisition.cpp)
+target_include_directories(test_acquisition PRIVATE fakes)
+target_link_libraries(test_acquisition PRIVATE remus_acquisition remus_hal)
+target_compile_options(test_acquisition PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_test(NAME acquisition COMMAND test_acquisition)
+
+add_executable(test_data_batch unit/test_data_batch.cpp)
+target_include_directories(test_data_batch PRIVATE fakes)
+target_link_libraries(test_data_batch PRIVATE remus_link remus_hal)
+target_compile_options(test_data_batch PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_test(NAME data_batch COMMAND test_data_batch)
