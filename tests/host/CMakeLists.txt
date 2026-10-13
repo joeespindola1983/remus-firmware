@@ -1,0 +1,60 @@
+cmake_minimum_required(VERSION 3.16)
+project(remus_host_tests LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+enable_testing()
+
+set(REPO_ROOT "${CMAKE_CURRENT_LIST_DIR}/../..")
+
+add_library(remus_core STATIC
+  "${REPO_ROOT}/components/remus_core/src/Config.cpp"
+  "${REPO_ROOT}/components/remus_core/src/Ids.cpp"
+  "${REPO_ROOT}/components/remus_core/src/PacketPool.cpp"
+)
+target_include_directories(remus_core PUBLIC
+  "${REPO_ROOT}/components/remus_core/include"
+)
+target_compile_options(remus_core PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
+add_library(remus_hal INTERFACE)
+target_include_directories(remus_hal INTERFACE
+  "${REPO_ROOT}/components/remus_hal/include"
+)
+target_link_libraries(remus_hal INTERFACE remus_core)
+
+add_library(remus_diagnostics STATIC
+  "${REPO_ROOT}/components/remus_diagnostics/src/EventLog.cpp"
+  "${REPO_ROOT}/components/remus_diagnostics/src/HealthCounters.cpp"
+)
+target_include_directories(remus_diagnostics PUBLIC
+  "${REPO_ROOT}/components/remus_diagnostics/include"
+)
+target_link_libraries(remus_diagnostics PUBLIC remus_core)
+target_compile_options(remus_diagnostics PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
+add_executable(test_core unit/test_core.cpp)
+target_link_libraries(test_core PRIVATE remus_core)
+target_compile_options(test_core PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_test(NAME core COMMAND test_core)
+
+add_executable(test_fakes unit/test_fakes.cpp)
+target_include_directories(test_fakes PRIVATE fakes)
+target_link_libraries(test_fakes PRIVATE remus_hal)
+target_compile_options(test_fakes PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_test(NAME fakes COMMAND test_fakes)
+
+add_executable(test_runtimes
+  integration/test_runtimes.cpp
+  "${REPO_ROOT}/firmware/blade/src/BladeRuntime.cpp"
+  "${REPO_ROOT}/firmware/computer/src/ComputerRuntime.cpp"
+)
+target_include_directories(test_runtimes PRIVATE
+  "${REPO_ROOT}/firmware/blade/src"
+  "${REPO_ROOT}/firmware/computer/src"
+)
+target_link_libraries(test_runtimes PRIVATE remus_diagnostics remus_hal)
+target_compile_options(test_runtimes PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_test(NAME runtimes COMMAND test_runtimes)

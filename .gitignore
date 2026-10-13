@@ -1,0 +1,15 @@
+.build/
+.pio/
+build/
+sdkconfig
+sdkconfig.*
+!sdkconfig.defaults
+dependencies.lock
+managed_components/
+compile_commands.json
+.DS_Store
+*.bin
+*.elf
+*.map
+*.pyc
+__pycache__/
