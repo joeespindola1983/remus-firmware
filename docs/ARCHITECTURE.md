@@ -7,6 +7,7 @@ remus_core <- remus_hal <- firmware/blade
      ^            ^      <- firmware/computer
      |
 remus_diagnostics
+remus_link -> remus_hal::ICrypto
 ```
 
 M0 establishes the product contracts. `remus_core`, `remus_hal`, and
@@ -53,6 +54,14 @@ not prevent the Computer runtime from starting.
 Log records contain monotonic time, severity, event name, and bounded details.
 Secrets, provisioning keys, stable identities, and raw evidence do not belong
 in this channel.
+
+## RemusRF v1 codec boundary
+
+`remus_link` owns the host-testable binary envelope, connection-message codecs,
+CRC32C validation and key derivation policy. Cryptographic operations remain
+behind `ICrypto`; the ESP32 adapter uses mbedTLS. The codec has no ESP-NOW,
+FreeRTOS, state-machine or storage dependency. M1 deliberately does not start
+the radio or claim a physical Blade connection.
 
 ## Current boundary
 

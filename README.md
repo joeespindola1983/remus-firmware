@@ -3,11 +3,17 @@
 Greenfield firmware for the Remus Computer and Remus Blade, built with C++17,
 ESP-IDF, and PlatformIO.
 
-This repository currently implements **Milestone M0 plus Computer diagnostics**:
+This repository currently implements **Milestone M0, Computer diagnostics, and
+the host-testable M1 RemusRF connection codec**:
 build foundations, hardware-abstraction contracts, bounded core containers,
 minimal composition roots, host tests, CI, and a bounded microSD diagnostic log.
 It intentionally contains no radio protocol, sensor acquisition, GPS, session
-storage writer, replay, handshake, or OTA implementation.
+storage writer, ESP-NOW driver/state machines, replay, or OTA implementation.
+
+M1 defines authenticated `BEACON`, `HELLO`, `BIND`, `BIND_ACK`, and
+`SOURCE_MANIFEST` frames plus canonical pair-key derivation. It does not claim
+that two physical devices are connected; radio operation and association belong
+to M2.
 
 ## Build
 

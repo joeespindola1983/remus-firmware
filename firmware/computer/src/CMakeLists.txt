@@ -8,6 +8,8 @@ idf_component_register(
     remus_core
     remus_hal
     remus_diagnostics
+    remus_link
+    remus_platform_esp32
     fatfs
     sdmmc
     esp_driver_spi

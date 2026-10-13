@@ -21,7 +21,7 @@ Validated on 2026-10-13 (macOS arm64):
 | `riscv32-esp-elf-g++` SHA-256 | `ba2d11db6e6d13cd80517f43d98133c3ea69828b866a91cc402e34e1a4c319eb` |
 | Blade build | PASS; RAM 9,316 B; app image 147,784 B |
 | Computer build | PASS; RAM 25,872 B; app image 279,560 B (with SD diagnostics) |
-| Host CTest | PASS; 4/4 tests |
+| Host CTest | PASS; 5/5 tests, including RemusRF v1 golden/truncation/authentication cases |
 | Standalone `idf.py` build | INCONCLUSIVE; no standalone ESP-IDF shell was installed on this host |
 
 The PlatformIO size report compares each app image with the default 1 MiB app

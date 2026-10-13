@@ -36,6 +36,17 @@ target_include_directories(remus_diagnostics PUBLIC
 target_link_libraries(remus_diagnostics PUBLIC remus_core)
 target_compile_options(remus_diagnostics PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
+add_library(remus_link STATIC
+  "${REPO_ROOT}/components/remus_link/src/FrameCodec.cpp"
+  "${REPO_ROOT}/components/remus_link/src/KeyDerivation.cpp"
+  "${REPO_ROOT}/components/remus_link/src/MessageCodec.cpp"
+)
+target_include_directories(remus_link PUBLIC
+  "${REPO_ROOT}/components/remus_link/include"
+)
+target_link_libraries(remus_link PUBLIC remus_hal)
+target_compile_options(remus_link PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
 add_executable(test_core unit/test_core.cpp)
 target_link_libraries(test_core PRIVATE remus_core)
 target_compile_options(test_core PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -64,3 +75,9 @@ add_executable(test_rotating_text_log unit/test_rotating_text_log.cpp)
 target_link_libraries(test_rotating_text_log PRIVATE remus_diagnostics)
 target_compile_options(test_rotating_text_log PRIVATE -Wall -Wextra -Wpedantic -Werror)
 add_test(NAME rotating_text_log COMMAND test_rotating_text_log)
+
+add_executable(test_remus_rf_v1 unit/test_remus_rf_v1.cpp)
+target_include_directories(test_remus_rf_v1 PRIVATE fakes)
+target_link_libraries(test_remus_rf_v1 PRIVATE remus_link remus_hal)
+target_compile_options(test_remus_rf_v1 PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_test(NAME remus_rf_v1 COMMAND test_remus_rf_v1)
