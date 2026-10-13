@@ -1,5 +1,9 @@
 #include "ComputerRuntime.hpp"
+#include "SdDiagnosticLogger.hpp"
 
+#include <cstdio>
+
+#include "esp_app_desc.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -13,27 +17,76 @@ constexpr TickType_t kHealthLogInterval = pdMS_TO_TICKS(5000);
 
 extern "C" void app_main(void) {
   static remus::computer::ComputerRuntime runtime;
+  static remus::computer::SdDiagnosticLogger sdLogger;
+  const remus::Status sdStatus = sdLogger.start();
+  if (!sdStatus.ok()) {
+    ESP_LOGE(kLogTag, "SD diagnostic log unavailable: error=%u detail=%lu",
+             static_cast<unsigned>(sdStatus.error),
+             static_cast<unsigned long>(sdStatus.detail));
+  } else {
+    const esp_app_desc_t* app = esp_app_get_description();
+    char bootDetails[320]{};
+    std::snprintf(bootDetails, sizeof(bootDetails),
+                  "role=computer reset_reason=%u project=%s version=%s idf=%s "
+                  "build_date=%s build_time=%s free_heap=%lu minimum_free_heap=%lu",
+                  static_cast<unsigned>(esp_reset_reason()), app->project_name, app->version,
+                  app->idf_ver, app->date, app->time,
+                  static_cast<unsigned long>(esp_get_free_heap_size()),
+                  static_cast<unsigned long>(esp_get_minimum_free_heap_size()));
+    sdLogger.enqueue(remus::computer::DiagnosticLogLevel::Info, "firmware_boot", bootDetails);
+    ESP_LOGI(kLogTag,
+             "SD diagnostic log ready: /sdcard/remus_pc.log + remus_pc.log.1 "
+             "(1 MiB maximum)");
+  }
+
   const remus::Status status = runtime.start();
   if (!status.ok()) {
     ESP_LOGE(kLogTag, "runtime start failed: error=%u detail=%lu",
              static_cast<unsigned>(status.error), static_cast<unsigned long>(status.detail));
+    char failureDetails[96]{};
+    std::snprintf(failureDetails, sizeof(failureDetails), "error=%u detail=%lu",
+                  static_cast<unsigned>(status.error),
+                  static_cast<unsigned long>(status.detail));
+    if (sdLogger.isReady()) {
+      sdLogger.enqueue(remus::computer::DiagnosticLogLevel::Error,
+                       "runtime_start_failed", failureDetails);
+    }
     return;
   }
   ESP_LOGI(kLogTag, "Remus Computer M0 ready (zero-Blade capable foundation)");
+  if (sdLogger.isReady()) {
+    sdLogger.enqueue(remus::computer::DiagnosticLogLevel::Info, "runtime_ready",
+                     "role=computer");
+  }
 
   for (;;) {
     const remus::diagnostics::HealthSnapshot health = runtime.healthSnapshot();
+    const remus::computer::SdDiagnosticLoggerStats sdLogStats = sdLogger.stats();
+    char healthDetails[320]{};
+    std::snprintf(
+        healthDetails, sizeof(healthDetails),
+        "uptime_ms=%llu runtime_starts=%lu queue_overflows=%lu pool_exhaustions=%lu "
+        "invalid_handle_releases=%lu free_heap=%lu minimum_free_heap=%lu "
+        "sd_log_queued=%lu sd_log_dropped=%lu sd_log_write_failures=%lu "
+        "sd_log_rotations=%lu",
+        static_cast<unsigned long long>(esp_timer_get_time() / 1000),
+        static_cast<unsigned long>(health.runtimeStarts),
+        static_cast<unsigned long>(health.queueOverflows),
+        static_cast<unsigned long>(health.poolExhaustions),
+        static_cast<unsigned long>(health.invalidHandleReleases),
+        static_cast<unsigned long>(esp_get_free_heap_size()),
+        static_cast<unsigned long>(esp_get_minimum_free_heap_size()),
+        static_cast<unsigned long>(sdLogStats.queued),
+        static_cast<unsigned long>(sdLogStats.dropped),
+        static_cast<unsigned long>(sdLogStats.writeFailures),
+        static_cast<unsigned long>(sdLogStats.rotations));
     ESP_LOGI(kLogTag,
-             "health uptime_ms=%llu runtime_starts=%lu queue_overflows=%lu "
-             "pool_exhaustions=%lu invalid_handle_releases=%lu free_heap=%lu "
-             "minimum_free_heap=%lu",
-             static_cast<unsigned long long>(esp_timer_get_time() / 1000),
-             static_cast<unsigned long>(health.runtimeStarts),
-             static_cast<unsigned long>(health.queueOverflows),
-             static_cast<unsigned long>(health.poolExhaustions),
-             static_cast<unsigned long>(health.invalidHandleReleases),
-             static_cast<unsigned long>(esp_get_free_heap_size()),
-             static_cast<unsigned long>(esp_get_minimum_free_heap_size()));
+             "health %s", healthDetails);
+    if (sdLogger.isReady() &&
+        !sdLogger.enqueue(remus::computer::DiagnosticLogLevel::Info, "health",
+                          healthDetails)) {
+      ESP_LOGW(kLogTag, "SD diagnostic log queue full; entry dropped");
+    }
     vTaskDelay(kHealthLogInterval);
   }
 }

@@ -9,10 +9,10 @@ remus_core <- remus_hal <- firmware/blade
 remus_diagnostics
 ```
 
-M0 establishes contracts only. `remus_core`, `remus_hal`, and
+M0 establishes the product contracts. `remus_core`, `remus_hal`, and
 `remus_diagnostics` are host-buildable and contain no ESP-IDF or FreeRTOS
-headers. The two `Runtime` classes are deliberately small composition roots and
-do not yet create hardware drivers or work loops.
+headers. The Computer composition root additionally owns an ESP-IDF microSD
+diagnostic adapter; the Blade has no storage dependency.
 
 ## Identity and evidence
 
@@ -40,9 +40,23 @@ do not yet create hardware drivers or work loops.
 reject writes without overwriting live data. `PacketPool` uses generation-tagged
 handles so stale or duplicate releases fail explicitly.
 
+## Computer diagnostic log
+
+The Computer's microSD log is an engineering observability channel, not a
+recording/session store and not RMS1 evidence. Producers enqueue fixed-size
+records without blocking. A low-priority writer task owns FAT file I/O, flushes
+and synchronizes each accepted line, and rotates two 512 KiB text segments.
+Queue overflow and I/O failure are counted and remain visible in the serial
+health heartbeat. Missing or faulty storage degrades diagnostics only; it does
+not prevent the Computer runtime from starting.
+
+Log records contain monotonic time, severity, event name, and bounded details.
+Secrets, provisioning keys, stable identities, and raw evidence do not belong
+in this channel.
+
 ## Current boundary
 
-There is no protocol, radio, cryptography implementation, acquisition, storage,
-navigation, replay, session control, or time synchronization in M0. `ICrypto`
-is a dependency-injection contract; `FakeCrypto` exists only for deterministic
-host tests and is not secure or linked into firmware.
+There is no protocol, radio, cryptography implementation, acquisition, session
+storage, navigation, replay, session control, or time synchronization in M0.
+`ICrypto` is a dependency-injection contract; `FakeCrypto` exists only for
+deterministic host tests and is not secure or linked into firmware.

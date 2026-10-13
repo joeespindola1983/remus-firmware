@@ -3,10 +3,11 @@
 Greenfield firmware for the Remus Computer and Remus Blade, built with C++17,
 ESP-IDF, and PlatformIO.
 
-This repository currently implements **Milestone M0 only**: build foundations,
-hardware-abstraction contracts, bounded core containers, minimal composition
-roots, host tests, and CI. It intentionally contains no radio protocol, sensor
-acquisition, GPS, storage writer, replay, handshake, or OTA implementation.
+This repository currently implements **Milestone M0 plus Computer diagnostics**:
+build foundations, hardware-abstraction contracts, bounded core containers,
+minimal composition roots, host tests, CI, and a bounded microSD diagnostic log.
+It intentionally contains no radio protocol, sensor acquisition, GPS, session
+storage writer, replay, handshake, or OTA implementation.
 
 ## Build
 
@@ -28,6 +29,12 @@ The ESP32-C3 native USB Serial/JTAG interface is the primary console for both
 targets. When `sdkconfig.defaults` changes, remove the generated
 `firmware/<target>/sdkconfig.<environment>` file before rebuilding so ESP-IDF
 regenerates the effective configuration.
+
+When a FAT-formatted microSD card is present in the Computer, operational events
+are also written to `remus_pc.log`. At 512 KiB it rotates to `remus_pc.log.1`;
+the next rotation replaces the archive, bounding both files to 1 MiB total.
+Card absence or write failure does not stop the Computer. This engineering log
+is deliberately separate from future session evidence and RMS1 storage.
 
 Native ESP-IDF builds are supported when an ESP-IDF 5.5.3 environment is
 active:

@@ -28,6 +28,7 @@ target_link_libraries(remus_hal INTERFACE remus_core)
 add_library(remus_diagnostics STATIC
   "${REPO_ROOT}/components/remus_diagnostics/src/EventLog.cpp"
   "${REPO_ROOT}/components/remus_diagnostics/src/HealthCounters.cpp"
+  "${REPO_ROOT}/components/remus_diagnostics/src/RotatingTextLog.cpp"
 )
 target_include_directories(remus_diagnostics PUBLIC
   "${REPO_ROOT}/components/remus_diagnostics/include"
@@ -58,3 +59,8 @@ target_include_directories(test_runtimes PRIVATE
 target_link_libraries(test_runtimes PRIVATE remus_diagnostics remus_hal)
 target_compile_options(test_runtimes PRIVATE -Wall -Wextra -Wpedantic -Werror)
 add_test(NAME runtimes COMMAND test_runtimes)
+
+add_executable(test_rotating_text_log unit/test_rotating_text_log.cpp)
+target_link_libraries(test_rotating_text_log PRIVATE remus_diagnostics)
+target_compile_options(test_rotating_text_log PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_test(NAME rotating_text_log COMMAND test_rotating_text_log)

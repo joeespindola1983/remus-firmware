@@ -20,8 +20,8 @@ Validated on 2026-10-13 (macOS arm64):
 | RISC-V toolchain | 14.2.0+20251107 |
 | `riscv32-esp-elf-g++` SHA-256 | `ba2d11db6e6d13cd80517f43d98133c3ea69828b866a91cc402e34e1a4c319eb` |
 | Blade build | PASS; RAM 9,532 B; app image 160,096 B |
-| Computer build | PASS; RAM 9,532 B; app image 160,136 B |
-| Host CTest | PASS; 3/3 tests |
+| Computer build | PASS; RAM 25,872 B; app image 279,560 B (with SD diagnostics) |
+| Host CTest | PASS; 4/4 tests |
 | Standalone `idf.py` build | INCONCLUSIVE; no standalone ESP-IDF shell was installed on this host |
 
 The PlatformIO size report compares each app image with the default 1 MiB app
@@ -35,7 +35,10 @@ a substitute for that gate.
 
 ## Physical evidence still required
 
-M0 has not executed a device upload or boot. USB console output, minimum free
-heap, physical flash capacity, GPIO safety, and idle/runtime RAM are therefore
-`INCONCLUSIVE`, not passing. The eight-encrypted-peer capacity and MPU-6050
-FIFO/DRDY jitter are M-1 bench gates and are not implemented here.
+The Computer has been uploaded and its native USB Serial/JTAG monitor has
+reconnected after reset. A sustained boot/heartbeat capture, minimum free heap,
+physical flash capacity, GPIO safety, and idle/runtime RAM remain
+`INCONCLUSIVE`. The diagnostic microSD mount, rotation at 512 KiB, recovery
+after power loss, and card-removal behavior also require bench evidence. The
+eight-encrypted-peer capacity and MPU-6050 FIFO/DRDY jitter are M-1 bench gates
+and are not implemented here.

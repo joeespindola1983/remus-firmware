@@ -2,6 +2,7 @@ idf_component_register(
   SRCS
     "src/EventLog.cpp"
     "src/HealthCounters.cpp"
+    "src/RotatingTextLog.cpp"
   INCLUDE_DIRS "include"
   REQUIRES remus_core
 )

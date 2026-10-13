@@ -18,7 +18,8 @@ inspected; this software setting is not evidence of physical capacity.
 - MCU: ESP32-C3; exact board and flash unverified
 - Future local MPU-6050: SDA GPIO 6, SCL GPIO 5
 - Future NEO-6M: ESP RX GPIO 0, TX GPIO 1
-- Future microSD: MISO 8, MOSI 10, SCK 20, CS 21
+- Diagnostic microSD adapter: MISO 8, MOSI 10, SCK 20, CS 21; 10 MHz SPI,
+  software integration complete but electrical/card compatibility unverified
 - Display pins and display support are outside the MVP
 
 These values are evidence from the existing prototype profile, not approval of
