@@ -18,7 +18,15 @@ network_secret=$4
 framework_dir="${PLATFORMIO_CORE_DIR:-$HOME/.platformio}/packages/framework-espidf"
 generator="$framework_dir/components/nvs_flash/nvs_partition_generator/nvs_partition_gen.py"
 esptool="${PLATFORMIO_CORE_DIR:-$HOME/.platformio}/packages/tool-esptoolpy/esptool.py"
+platformio_python="${PLATFORMIO_CORE_DIR:-$HOME/.platformio}/penv/bin/python3"
 [[ -f $generator && -f $esptool ]] || { echo "ESP-IDF PlatformIO packages are not installed" >&2; exit 1; }
+[[ -x $platformio_python ]] || { echo "PlatformIO Python environment is not installed" >&2; exit 1; }
+if ! "$platformio_python" -c 'import esp_idf_nvs_partition_gen' 2>/dev/null; then
+  echo "PlatformIO is missing the ESP-IDF NVS generator dependency." >&2
+  echo "Install it once with:" >&2
+  echo "  $platformio_python -m pip install esp-idf-nvs-partition-gen" >&2
+  exit 1
+fi
 
 work_dir=$(mktemp -d)
 trap 'rm -rf "$work_dir"' EXIT
@@ -33,6 +41,6 @@ printf '%s\n' \
   "network_id,data,u32,$network_id" \
   "network_secret,data,hex2bin,$network_secret" > "$csv"
 
-python3 "$generator" generate "$csv" "$image" 0x6000
-python3 "$esptool" --chip esp32c3 --port "$port" write_flash 0x9000 "$image"
+"$platformio_python" "$generator" generate "$csv" "$image" 0x6000
+"$platformio_python" "$esptool" --chip esp32c3 --port "$port" write_flash 0x9000 "$image"
 echo "Provisioned Remus NVS on $port (device and network identifiers only; secret not printed)."
