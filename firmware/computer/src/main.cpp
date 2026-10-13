@@ -24,9 +24,8 @@ extern "C" void app_main(void) {
   static remus::computer::ComputerRuntime runtime;
   static remus::computer::SdDiagnosticLogger sdLogger;
   static remus::computer::ComputerRadioService radioService(&sdLogger, recordingId);
-  // This is an independent Computer role profile; the provisional values come
-  // from HARDWARE_PROFILES.md and can diverge from the Blade without touching
-  // the shared driver or acquisition pipeline.
+  // Independent Computer role profile. The owner-confirmed remus-sensor wiring
+  // uses the same GPIO numbers as the Blade, on a physically separate I2C bus.
   static constexpr remus::platform::esp32::Mpu6050Config computerImu{
       GPIO_NUM_6, GPIO_NUM_5, GPIO_NUM_NC, 0x68, 400000};
   static remus::computer::ComputerAcquisitionService acquisitionService(computerImu);

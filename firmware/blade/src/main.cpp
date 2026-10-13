@@ -15,8 +15,8 @@ constexpr TickType_t kHealthLogInterval = pdMS_TO_TICKS(5000);
 extern "C" void app_main(void) {
   static remus::blade::BladeRuntime runtime;
   static remus::blade::BladeRadioService radioService;
-  // Blade wiring is an independent role profile. DRDY remains disabled until
-  // its physical GPIO is approved and wired for the H3 jitter gate.
+  // Independent Blade role profile preserving the owner-confirmed remus-sensor
+  // SDA/SCL wiring. DRDY was not wired in that profile and remains disabled.
   static constexpr remus::platform::esp32::Mpu6050Config bladeImu{
       GPIO_NUM_6, GPIO_NUM_5, GPIO_NUM_NC, 0x68, 400000};
   static remus::blade::BladeAcquisitionService acquisitionService(radioService, bladeImu);
