@@ -37,9 +37,14 @@ target_link_libraries(remus_diagnostics PUBLIC remus_core)
 target_compile_options(remus_diagnostics PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 add_library(remus_link STATIC
+  "${REPO_ROOT}/components/remus_link/src/BladeLinkStateMachine.cpp"
+  "${REPO_ROOT}/components/remus_link/src/ComputerPeerStateMachine.cpp"
   "${REPO_ROOT}/components/remus_link/src/FrameCodec.cpp"
   "${REPO_ROOT}/components/remus_link/src/KeyDerivation.cpp"
   "${REPO_ROOT}/components/remus_link/src/MessageCodec.cpp"
+  "${REPO_ROOT}/components/remus_link/src/RadioSupervisor.cpp"
+  "${REPO_ROOT}/components/remus_link/src/SourceRegistry.cpp"
+  "${REPO_ROOT}/components/remus_link/src/TxScheduler.cpp"
 )
 target_include_directories(remus_link PUBLIC
   "${REPO_ROOT}/components/remus_link/include"
@@ -81,3 +86,8 @@ target_include_directories(test_remus_rf_v1 PRIVATE fakes)
 target_link_libraries(test_remus_rf_v1 PRIVATE remus_link remus_hal)
 target_compile_options(test_remus_rf_v1 PRIVATE -Wall -Wextra -Wpedantic -Werror)
 add_test(NAME remus_rf_v1 COMMAND test_remus_rf_v1)
+
+add_executable(test_link_state unit/test_link_state.cpp)
+target_link_libraries(test_link_state PRIVATE remus_link remus_hal)
+target_compile_options(test_link_state PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_test(NAME link_state COMMAND test_link_state)

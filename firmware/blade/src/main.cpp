@@ -1,5 +1,5 @@
+#include "BladeRadioService.hpp"
 #include "BladeRuntime.hpp"
-
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -9,17 +9,24 @@
 namespace {
 constexpr char kLogTag[] = "remus_blade";
 constexpr TickType_t kHealthLogInterval = pdMS_TO_TICKS(5000);
-}
+}  // namespace
 
 extern "C" void app_main(void) {
   static remus::blade::BladeRuntime runtime;
+  static remus::blade::BladeRadioService radioService;
   const remus::Status status = runtime.start();
   if (!status.ok()) {
     ESP_LOGE(kLogTag, "runtime start failed: error=%u detail=%lu",
              static_cast<unsigned>(status.error), static_cast<unsigned long>(status.detail));
     return;
   }
-  ESP_LOGI(kLogTag, "Remus Blade M0 ready");
+  ESP_LOGI(kLogTag, "Remus Blade core runtime ready");
+  const remus::Status radioStatus = radioService.start();
+  if (!radioStatus.ok()) {
+    ESP_LOGE(kLogTag, "radio unavailable: error=%u detail=%lu (provision NVS before M2 test)",
+             static_cast<unsigned>(radioStatus.error),
+             static_cast<unsigned long>(radioStatus.detail));
+  }
 
   for (;;) {
     const remus::diagnostics::HealthSnapshot health = runtime.healthSnapshot();

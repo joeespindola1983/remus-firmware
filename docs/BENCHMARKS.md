@@ -19,9 +19,9 @@ Validated on 2026-10-13 (macOS arm64):
 | ESP-IDF | 5.5.3 (`framework-espidf` 3.50503.0) |
 | RISC-V toolchain | 14.2.0+20251107 |
 | `riscv32-esp-elf-g++` SHA-256 | `ba2d11db6e6d13cd80517f43d98133c3ea69828b866a91cc402e34e1a4c319eb` |
-| Blade build | PASS; RAM 9,316 B; app image 147,784 B |
-| Computer build | PASS; RAM 25,872 B; app image 279,560 B (with SD diagnostics) |
-| Host CTest | PASS; 5/5 tests, including RemusRF v1 golden/truncation/authentication cases |
+| Blade M2 build | PASS; RAM 57,148 B; app image 758,814 B |
+| Computer M2 build | PASS; RAM 79,836 B; app image 872,320 B (radio + SD diagnostics) |
+| Host CTest | PASS; 6/6 tests, including codec, registry, state, scheduler, supervisor, and log cases |
 | Standalone `idf.py` build | INCONCLUSIVE; no standalone ESP-IDF shell was installed on this host |
 
 The PlatformIO size report compares each app image with the default 1 MiB app
@@ -40,5 +40,6 @@ reconnected after reset. A sustained boot/heartbeat capture, minimum free heap,
 physical flash capacity, GPIO safety, and idle/runtime RAM remain
 `INCONCLUSIVE`. The diagnostic microSD mount, rotation at 512 KiB, recovery
 after power loss, and card-removal behavior also require bench evidence. The
-eight-encrypted-peer capacity and MPU-6050 FIFO/DRDY jitter are M-1 bench gates
-and are not implemented here.
+M2 H1/H2 association captures and physical eight-encrypted-peer capacity are
+still required; host tests alone do not prove RF behavior. MPU-6050 FIFO/DRDY
+jitter belongs to M3 and is not implemented here.

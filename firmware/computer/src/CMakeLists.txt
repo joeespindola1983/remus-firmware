@@ -1,6 +1,7 @@
 idf_component_register(
   SRCS
     "ComputerRuntime.cpp"
+    "ComputerRadioService.cpp"
     "SdDiagnosticLogger.cpp"
     "main.cpp"
   INCLUDE_DIRS "."
