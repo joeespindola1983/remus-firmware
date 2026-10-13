@@ -35,6 +35,20 @@ a substitute for that gate.
 
 ## Physical evidence still required
 
+### M2 partial bench capture — 2026-10-13
+
+A user-supplied Computer serial capture demonstrated two separately provisioned
+Blades joining after the Computer started. Both progressed from authenticated
+candidate to application-confirmed `Bound`: the first at 6.857 s with RSSI
+-65 dBm and the second at 14.867 s with RSSI -70 dBm. The registry reported two
+sources; runtime queues, pools, and the SD diagnostic writer reported zero
+drops or write failures. Stable identities and MAC addresses are intentionally
+omitted from this evidence summary.
+
+This proves the PC-first/two-Blade path. Blade-first boot order, individual
+Blade restart/reassociation, and eight encrypted physical peers remain pending;
+therefore M2 is not yet promoted to `develop`.
+
 The Computer has been uploaded and its native USB Serial/JTAG monitor has
 reconnected after reset. A sustained boot/heartbeat capture, minimum free heap,
 physical flash capacity, GPIO safety, and idle/runtime RAM remain
