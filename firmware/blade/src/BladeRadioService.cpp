@@ -77,6 +77,7 @@ void BladeRadioService::taskEntry(void* p) noexcept { static_cast<BladeRadioServ
 void BladeRadioService::run() noexcept {
   Event e{};
   std::int64_t lastHello = 0;
+  std::int64_t lastRecoveryAttempt = -1000000;
   for (;;) {
     if (xQueueReceive(queue_, &e, pdMS_TO_TICKS(100)) == pdTRUE) {
       if (e.kind == EventKind::Receive)
@@ -95,8 +96,36 @@ void BladeRadioService::run() noexcept {
       sendHello();
       lastHello = now;
     }
-    tx_.poll();
+    const Status txStatus = tx_.poll(static_cast<NativeTimestampUs>(now));
+    if (txStatus.error == Error::Timeout)
+      ESP_LOGE(kTag, "tx callback timeout; restarting ESP-NOW before next frame");
+    if (tx_.recoveryRequired() && now - lastRecoveryAttempt >= 1000000) {
+      if (txStatus.error == Error::Timeout)
+        supervisor_.observe(link::RadioHealthEvent::DriverFailure,
+                            static_cast<NativeTimestampUs>(now));
+      lastRecoveryAttempt = now;
+      const Status recovery = recoverRadio(static_cast<NativeTimestampUs>(now));
+      if (!recovery.ok())
+        ESP_LOGE(kTag, "radio recovery failed error=%u detail=%lu",
+                 static_cast<unsigned>(recovery.error),
+                 static_cast<unsigned long>(recovery.detail));
+    }
   }
+}
+
+Status BladeRadioService::recoverRadio(NativeTimestampUs nowUs) noexcept {
+  std::array<std::uint8_t, 16> pmk{};
+  Status status = link::derivePmk(crypto_, secret_.data(), secret_.size(), networkId_, pmk);
+  if (!status.ok()) return status;
+  radio_.stop();
+  status = radio_.start(1);
+  if (status.ok()) status = radio_.setPrimaryMasterKey(pmk.data());
+  if (status.ok() && state_.state() != link::BladeLinkState::Discovering)
+    status = radio_.addPeer(computerAddress_, pairKeys_.pairLmk.data());
+  if (!status.ok()) return status;
+  tx_.resetAfterRadioRestart(nowUs);
+  supervisor_.observe(link::RadioHealthEvent::Reinitialized, nowUs);
+  return Status::success();
 }
 void BladeRadioService::handleReceive(const Event& e) noexcept {
   link::DecodedFrame frame{};
@@ -222,7 +251,10 @@ void BladeRadioService::sendDataBatch(const Event& event) noexcept {
           .encode(header, event.bytes, event.size, pairKeys_.pairAuthKey.data(),
                   pairKeys_.pairAuthKey.size(), frame)
           .ok()) {
-    tx_.enqueue(computerAddress_, frame.bytes.data(), frame.size);
+    const Status queued = tx_.enqueue(computerAddress_, frame.bytes.data(), frame.size);
+    if (!queued.ok())
+      ESP_LOGW(kTag, "batch_drop reason=tx_scheduler_queue error=%u",
+               static_cast<unsigned>(queued.error));
   }
 }
 void BladeRadioService::sendHello() noexcept {

@@ -53,6 +53,7 @@ class ComputerRadioService final : public hal::IRadioEvents {
   void handleSourceManifest(link::SourceEntry&, const link::DecodedFrame&) noexcept;
   void sendBeacon() noexcept;
   void sendBind(link::SourceEntry&) noexcept;
+  Status recoverRadio(NativeTimestampUs nowUs) noexcept;
   bool enqueue(const Event&) noexcept;
   void log(DiagnosticLogLevel, const char*, const char*) noexcept;
 

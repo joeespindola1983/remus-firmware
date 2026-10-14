@@ -105,13 +105,37 @@ void testTxSchedulerKeepsOneFrameInFlight() {
   const std::uint8_t bytes[]{1, 2, 3};
   EXPECT(scheduler.enqueue(mac(1), bytes, sizeof(bytes)).ok());
   EXPECT(scheduler.enqueue(mac(2), bytes, sizeof(bytes)).ok());
-  EXPECT(scheduler.poll().ok());
+  EXPECT(scheduler.poll(100).ok());
   EXPECT(radio.requests == 1);
-  EXPECT(scheduler.poll().ok());
+  EXPECT(scheduler.poll(200).ok());
   EXPECT(radio.requests == 1);
   scheduler.onSendComplete(mac(1), true);
-  EXPECT(scheduler.poll().ok());
+  EXPECT(scheduler.poll(300).ok());
   EXPECT(radio.requests == 2);
+}
+
+void testTxSchedulerRequiresDriverRecoveryAfterMissingCallback() {
+  FakeRadio radio;
+  remus::link::TxScheduler scheduler(radio);
+  const std::uint8_t bytes[]{1, 2, 3};
+  EXPECT(scheduler.enqueue(mac(1), bytes, sizeof(bytes)).ok());
+  EXPECT(scheduler.enqueue(mac(2), bytes, sizeof(bytes)).ok());
+  EXPECT(scheduler.poll(100).ok());
+  EXPECT(scheduler.poll(500099).ok());
+  EXPECT(scheduler.poll(500100).error == remus::Error::Timeout);
+  EXPECT(scheduler.recoveryRequired());
+  scheduler.onSendComplete(mac(1), true);
+  EXPECT(scheduler.stats().lateCallbacks == 1);
+  scheduler.resetAfterRadioRestart(500100);
+  EXPECT(!scheduler.recoveryRequired());
+  EXPECT(scheduler.depth() == 1);
+  EXPECT(scheduler.stats().callbackTimeouts == 1);
+  EXPECT(scheduler.stats().recoveryResets == 1);
+  EXPECT(scheduler.poll(600099).ok());
+  EXPECT(radio.requests == 1);
+  EXPECT(scheduler.poll(600100).ok());
+  EXPECT(radio.requests == 2);
+  EXPECT(radio.lastDestination == mac(2));
 }
 
 void testRadioSupervisorBacksOffPersistentFailure() {
@@ -135,6 +159,7 @@ int main() {
   testRegistryBoundsAndIdentityCollision();
   testCandidateExpiryIsAbsolute();
   testTxSchedulerKeepsOneFrameInFlight();
+  testTxSchedulerRequiresDriverRecoveryAfterMissingCallback();
   testRadioSupervisorBacksOffPersistentFailure();
   return failures == 0 ? 0 : 1;
 }

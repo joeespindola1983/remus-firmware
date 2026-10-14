@@ -91,6 +91,7 @@ void ComputerRadioService::taskEntry(void* context) noexcept {
 void ComputerRadioService::run() noexcept {
   Event event{};
   std::int64_t lastBeaconUs = -kBeaconIntervalUs;
+  std::int64_t lastRecoveryAttemptUs = -1000000;
   for (;;) {
     if (xQueueReceive(queue_, &event, pdMS_TO_TICKS(100)) == pdTRUE) {
       if (event.kind == EventKind::Receive)
@@ -131,8 +132,44 @@ void ComputerRadioService::run() noexcept {
                                    removed, link::SourceRegistry::capacity());
     for (std::size_t index = 0; index < expired; ++index) radio_.removePeer(removed[index]);
     if (expired) log(DiagnosticLogLevel::Warning, "blade_candidate_expired", "bind_timeout=true");
-    tx_.poll();
+    const Status txStatus = tx_.poll(static_cast<NativeTimestampUs>(now));
+    if (txStatus.error == Error::Timeout) {
+      ESP_LOGE(kTag, "tx callback timeout; restarting ESP-NOW before next frame");
+      log(DiagnosticLogLevel::Error, "tx_callback_timeout", "radio_restart=true");
+      supervisor_.observe(link::RadioHealthEvent::DriverFailure,
+                          static_cast<NativeTimestampUs>(now));
+    }
+    if (tx_.recoveryRequired() && now - lastRecoveryAttemptUs >= 1000000) {
+      lastRecoveryAttemptUs = now;
+      const Status recovery = recoverRadio(static_cast<NativeTimestampUs>(now));
+      if (!recovery.ok()) {
+        ESP_LOGE(kTag, "radio recovery failed error=%u detail=%lu",
+                 static_cast<unsigned>(recovery.error),
+                 static_cast<unsigned long>(recovery.detail));
+        log(DiagnosticLogLevel::Error, "radio_recovery_failed", "retry_pending=true");
+      }
+    }
   }
+}
+
+Status ComputerRadioService::recoverRadio(NativeTimestampUs nowUs) noexcept {
+  std::array<std::uint8_t, 16> pmk{};
+  Status status = link::derivePmk(crypto_, secret_.data(), secret_.size(), networkId_, pmk);
+  if (!status.ok()) return status;
+  radio_.stop();
+  status = radio_.start(1);
+  if (status.ok()) status = radio_.setPrimaryMasterKey(pmk.data());
+  for (std::size_t index = 0; status.ok() && index < link::SourceRegistry::capacity(); ++index) {
+    auto* source = registry_.entryAt(index);
+    if (source != nullptr &&
+        source->state.state() != link::ComputerPeerState::Candidate)
+      status = radio_.addPeer(source->address, source->pairKeys.pairLmk.data());
+  }
+  if (!status.ok()) return status;
+  tx_.resetAfterRadioRestart(nowUs);
+  supervisor_.observe(link::RadioHealthEvent::Reinitialized, nowUs);
+  log(DiagnosticLogLevel::Warning, "radio_reinitialized", "reason=tx_callback_timeout");
+  return Status::success();
 }
 void ComputerRadioService::handleReceive(const Event& event) noexcept {
   link::DecodedFrame frame{};

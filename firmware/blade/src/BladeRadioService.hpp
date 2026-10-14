@@ -45,6 +45,7 @@ class BladeRadioService final : public hal::IRadioEvents {
   void sendHello() noexcept;
   void sendSourceManifest() noexcept;
   void sendDataBatch(const Event&) noexcept;
+  Status recoverRadio(NativeTimestampUs nowUs) noexcept;
   bool enqueue(const Event&) noexcept;
   static constexpr std::size_t kQueueCapacity = 16;
   platform::esp32::MbedTlsCrypto crypto_{};
