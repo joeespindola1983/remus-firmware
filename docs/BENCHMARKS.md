@@ -136,3 +136,32 @@ both Blades, then execute
 [`tests/hardware/runbooks/M4_ACK_REPLAY.md`](../tests/hardware/runbooks/M4_ACK_REPLAY.md).
 Required evidence includes controlled packet loss, replay recovery without
 duplicate RMS batches, bounded replay depth, and continued 200 Hz acquisition.
+
+## Two-Blade field capture for v1.0.0-alpha.2 — 2026-10-14
+
+The integration revision `98d3b39` was installed on one Computer and two
+separately provisioned Blades. The Computer boot log reported
+`v1.0.0-alpha.1-8-g98d3b39-dirty`; the dirty suffix came from unrelated local
+RMS1 work that is not included in this release. The resulting RMS1 artifact was
+validated with `tools/remus-inspect/remus_inspect.py`. Stable physical device
+identities and route information are intentionally omitted here.
+
+| Source | Recorded samples | Approximate coverage | Effective IMU profile |
+|---|---:|---:|---|
+| Computer IMU | 452,680 | 37 min 43 s | +/-8 g, +/-1000 dps, 200 Hz |
+| Blade A | 431,140 | 35 min 56 s | +/-16 g, +/-2000 dps, 200 Hz |
+| Blade B | 423,984 | 35 min 20 s | +/-16 g, +/-2000 dps, 200 Hz |
+
+The artifact contained all three source manifests and no explicit irreversible
+gap record. The current inspector's `inferred_gaps` counter increments on
+arrival-order transitions caused by selective replay, so it is not evidence of
+final missing batches; final sequence-set reconciliation remains an inspector
+follow-up. This field capture demonstrates concurrent useful acquisition from
+the Computer and two Blades, but does not replace the controlled M4 loss tests.
+
+Release qualification for `v1.0.0-alpha.2` therefore covers the observed
+three-source field path, role-specific verified IMU profiles, bounded serial
+diagnostics, selective replay, durable RMS1 checkpointing, and Blade
+reassociation after a new boot identity at host-test level. GPS, controlled
+Blade restart evidence, induced recoverable/unrecoverable RF loss, clean
+session finalization, and eight physical encrypted peers remain pending.
