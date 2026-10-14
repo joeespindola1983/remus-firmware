@@ -13,6 +13,9 @@ constexpr std::size_t kHelloPayloadBytes = 44;
 constexpr std::size_t kBindPayloadBytes = 32;
 constexpr std::size_t kBindAckPayloadBytes = 32;
 constexpr std::size_t kSourceManifestPayloadBytes = 34;
+constexpr std::size_t kAckWindowPayloadBytes = 28;
+constexpr std::size_t kReplayRequestPayloadBytes = 20;
+constexpr std::size_t kGapNoticePayloadBytes = 32;
 constexpr std::size_t kDataBatchPrefixBytes = 16;
 constexpr std::size_t kDataBatchSampleBytes = 16;
 constexpr std::size_t kMaximumDataBatchSamples = 10;
@@ -87,6 +90,39 @@ struct DataBatch {
   std::array<DataBatchSample, kMaximumDataBatchSamples> samples{};
 };
 
+constexpr std::uint16_t kReceiverHealthAcceptedValid = 1U << 0U;
+constexpr std::uint16_t kReceiverHealthCheckpointedValid = 1U << 1U;
+constexpr std::uint16_t kReceiverHealthStorageDegraded = 1U << 2U;
+
+struct AckWindow {
+  BladeId bladeId{0};
+  DeviceBootId bladeBootId{0};
+  std::uint32_t acceptedThrough{0};
+  std::uint32_t receivedBitmap{0};
+  std::uint32_t checkpointedThrough{0};
+  std::uint16_t receiverHealth{0};
+  std::uint16_t reserved{0};
+  bool acceptedValid{false};
+  bool checkpointedValid{false};
+};
+
+struct ReplayRequest {
+  BladeId bladeId{0};
+  DeviceBootId bladeBootId{0};
+  std::uint32_t firstSeq{0};
+  std::uint8_t count{0};
+  std::uint8_t reason{0};
+};
+
+struct GapNotice {
+  BladeId bladeId{0};
+  DeviceBootId bladeBootId{0};
+  std::uint32_t fromSeq{0};
+  std::uint32_t throughSeq{0};
+  SampleIndex firstSampleIndex{0};
+  std::uint16_t reason{0};
+};
+
 class MessageCodec {
  public:
   // Encode methods write an exact-size payload into caller-owned storage and
@@ -97,6 +133,9 @@ class MessageCodec {
   static Status encode(const BindAck&, std::uint8_t*, std::size_t, std::size_t&) noexcept;
   static Status encode(const SourceManifest&, std::uint8_t*, std::size_t, std::size_t&) noexcept;
   static Status encode(const DataBatch&, std::uint8_t*, std::size_t, std::size_t&) noexcept;
+  static Status encode(const AckWindow&, std::uint8_t*, std::size_t, std::size_t&) noexcept;
+  static Status encode(const ReplayRequest&, std::uint8_t*, std::size_t, std::size_t&) noexcept;
+  static Status encode(const GapNotice&, std::uint8_t*, std::size_t, std::size_t&) noexcept;
   // Decode methods require the exact normative payload length and zero-valued
   // reserved bytes. Callers use the result only when Status::ok().
   static Status decode(const std::uint8_t*, std::size_t, Beacon&) noexcept;
@@ -105,5 +144,8 @@ class MessageCodec {
   static Status decode(const std::uint8_t*, std::size_t, BindAck&) noexcept;
   static Status decode(const std::uint8_t*, std::size_t, SourceManifest&) noexcept;
   static Status decode(const std::uint8_t*, std::size_t, DataBatch&) noexcept;
+  static Status decode(const std::uint8_t*, std::size_t, AckWindow&) noexcept;
+  static Status decode(const std::uint8_t*, std::size_t, ReplayRequest&) noexcept;
+  static Status decode(const std::uint8_t*, std::size_t, GapNotice&) noexcept;
 };
 }  // namespace remus::link
