@@ -12,7 +12,10 @@ control, clean finalization, recovery-on-boot, and OTA are not yet implemented.
 
 M2 broadcasts authenticated `BEACON`/`HELLO`, derives per-pair keys, registers
 encrypted peers, and considers a Blade bound only after its authenticated
-`BIND_ACK`. Physical H1/H2 evidence is still required before M2 is accepted.
+`BIND_ACK`. A field capture has demonstrated concurrent recording from two
+separately provisioned Blades; the remaining controlled boot-order, restart,
+loss/replay, and long-duration acceptance cases are tracked in
+[`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
 
 ## Build
 
@@ -95,7 +98,7 @@ decimal strings) and preserve source-local clock semantics.
 
 ## Hardware evidence
 
-Successful compilation is not a physical hardware gate. Encrypted-peer
-capacity, association under both boot orders, and on-device memory measurements
-remain pending bench evidence in
+Successful compilation is not a physical hardware gate. Eight-encrypted-peer
+capacity, association under every controlled boot order, and the induced
+loss/replay cases remain pending bench evidence in
 [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
