@@ -10,6 +10,7 @@ namespace {
 constexpr char kTag[] = "blade_acquisition";
 constexpr std::uint16_t kRateHz = 200;
 constexpr TickType_t kPollInterval = pdMS_TO_TICKS(1);
+static_assert(kPollInterval > 0, "Blade acquisition requires a 1 kHz FreeRTOS tick");
 }  // namespace
 
 NativeTimestampUs BladeAcquisitionService::EspTimerClock::monotonicUs() const noexcept {
@@ -42,9 +43,11 @@ void BladeAcquisitionService::taskEntry(void* context) noexcept {
 }
 
 void BladeAcquisitionService::run() noexcept {
+  TickType_t lastWake = xTaskGetTickCount();
   for (;;) {
     if (pipeline_.recordingId() == 0) {
       vTaskDelay(pdMS_TO_TICKS(10));
+      lastWake = xTaskGetTickCount();
       continue;
     }
     const auto now = clock_.monotonicUs();
@@ -52,7 +55,7 @@ void BladeAcquisitionService::run() noexcept {
     if (!result.status.ok() && result.status.error != Error::IoFailure)
       ESP_LOGW(kTag, "pipeline error=%u detail=%lu", static_cast<unsigned>(result.status.error),
                static_cast<unsigned long>(result.status.detail));
-    vTaskDelay(kPollInterval);
+    xTaskDelayUntil(&lastWake, kPollInterval);
   }
 }
 

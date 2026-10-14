@@ -10,6 +10,7 @@ namespace remus::computer {
 namespace {
 constexpr char kTag[] = "computer_acquisition";
 constexpr TickType_t kPollInterval = pdMS_TO_TICKS(1);
+static_assert(kPollInterval > 0, "Computer acquisition requires a 1 kHz FreeRTOS tick");
 }  // namespace
 
 NativeTimestampUs ComputerAcquisitionService::EspTimerClock::monotonicUs() const noexcept {
@@ -45,12 +46,13 @@ void ComputerAcquisitionService::taskEntry(void* context) noexcept {
 }
 
 void ComputerAcquisitionService::run() noexcept {
+  TickType_t lastWake = xTaskGetTickCount();
   for (;;) {
     const auto result = pipeline_.poll(clock_.monotonicUs());
     if (!result.status.ok() && result.status.error != Error::IoFailure)
       ESP_LOGW(kTag, "pipeline error=%u detail=%lu", static_cast<unsigned>(result.status.error),
                static_cast<unsigned long>(result.status.detail));
-    vTaskDelay(kPollInterval);
+    xTaskDelayUntil(&lastWake, kPollInterval);
   }
 }
 

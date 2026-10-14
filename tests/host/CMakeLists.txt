@@ -137,3 +137,8 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 add_test(NAME remus_inspect
   COMMAND "${Python3_EXECUTABLE}" "${REPO_ROOT}/tools/remus-inspect/test_remus_inspect.py"
 )
+
+add_test(NAME firmware_config
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/test_firmware_config.py"
+          "${REPO_ROOT}"
+)
