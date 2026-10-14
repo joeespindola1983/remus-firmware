@@ -3,13 +3,13 @@
 namespace remus::acquisition {
 
 Status AcquisitionPipeline::initialize(const SamplingConfig& config, hal::IImu& imu,
-                                       hal::IClock& clock,
-                                       IAcquisitionSink& sink) noexcept {
-  if (config.rateHz == 0 || 1000000U % config.rateHz != 0)
+                                       hal::IClock& clock, IAcquisitionSink& sink) noexcept {
+  if (!core::validateImuProfile(config.imuProfile).ok() ||
+      1000000U % config.imuProfile.sampleRateHz != 0)
     return Status::failure(Error::InvalidArgument);
   const auto status = sampler_.initialize(config, imu, clock);
   if (!status.ok()) return status;
-  nominalPeriodUs_ = static_cast<std::uint16_t>(1000000U / config.rateHz);
+  nominalPeriodUs_ = static_cast<std::uint16_t>(1000000U / config.imuProfile.sampleRateHz);
   sink_ = &sink;
   return Status::success();
 }

@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "remus/core/ImuProfile.hpp"
 #include "remus/core/Status.hpp"
 
 namespace remus::hal {
@@ -19,7 +20,8 @@ struct ImuRaw {
 class IImu {
  public:
   virtual ~IImu() = default;
-  virtual Status initialize(std::uint16_t samplingRateHertz) noexcept = 0;
+  virtual Status initialize(const core::ImuProfile& profile) noexcept = 0;
+  virtual const core::EffectiveImuProfile& effectiveProfile() const noexcept = 0;
   virtual Status configureFifo(bool enabled) noexcept = 0;
   virtual Status read(ImuRaw& out) noexcept = 0;
   virtual Status readFifo(ImuRaw* destination, std::size_t maxSamples,

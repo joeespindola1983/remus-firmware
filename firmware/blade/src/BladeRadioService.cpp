@@ -9,6 +9,7 @@
 #include "remus/link/BindAcceptance.hpp"
 #include "nvs_flash.h"
 #include "remus/link/MessageCodec.hpp"
+#include "remus/link/SourceManifestBuilder.hpp"
 
 namespace remus::blade {
 namespace {
@@ -99,13 +100,13 @@ void BladeRadioService::run() noexcept {
       } else {
         sendDataBatch(e);
       }
-    RecordingId lostRecordingId = 0;
-    link::ReplayGap lostGap{};
-    if (takeDroppedGap(lostRecordingId, lostGap) &&
-        lostRecordingId == state_.recordingId()) {
-      replay_.recordLostGap(lostRecordingId, lostGap);
-      sendGapNotice(lostGap, 3);
-    }
+      RecordingId lostRecordingId = 0;
+      link::ReplayGap lostGap{};
+      if (takeDroppedGap(lostRecordingId, lostGap) &&
+          lostRecordingId == state_.recordingId()) {
+        replay_.recordLostGap(lostRecordingId, lostGap);
+        sendGapNotice(lostGap, 3);
+      }
     }
     const auto now = esp_timer_get_time();
     if (state_.state() == link::BladeLinkState::HelloReady && now - lastHello >= 800000) {
@@ -226,8 +227,10 @@ void BladeRadioService::handleReceive(const Event& e) noexcept {
 
 void BladeRadioService::sendSourceManifest() noexcept {
   if (acquisition_ == nullptr) return;
-  const link::SourceManifest manifest{deviceId_, bootId_, acquisition_->detectedIdentity(),
-                                      8, 500, 42, 200, 0, 0, 0, 0, 0, 4096, 655};
+  link::SourceManifest manifest{};
+  if (!link::buildSourceManifest(deviceId_, bootId_, acquisition_->effectiveImuProfile(), manifest)
+           .ok())
+    return;
   std::uint8_t payload[link::kSourceManifestPayloadBytes]{};
   std::size_t payloadSize = 0;
   if (!link::MessageCodec::encode(manifest, payload, sizeof(payload), payloadSize).ok()) return;

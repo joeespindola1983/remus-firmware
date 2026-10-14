@@ -56,9 +56,9 @@ Status Mpu6050Driver::readRegisters(std::uint8_t reg, std::uint8_t* data,
   return Status::failure(Error::IoFailure, static_cast<std::uint32_t>(error));
 }
 
-Status Mpu6050Driver::initialize(std::uint16_t samplingRateHertz) noexcept {
-  if (initialized_ || samplingRateHertz == 0 || samplingRateHertz > 1000 ||
-      1000U % samplingRateHertz != 0 || config_.sda == GPIO_NUM_NC ||
+Status Mpu6050Driver::initialize(const core::ImuProfile& profile) noexcept {
+  if (initialized_ || !core::validateImuProfile(profile).ok() ||
+      config_.sda == GPIO_NUM_NC ||
       config_.scl == GPIO_NUM_NC) {
     return Status::failure(Error::InvalidArgument);
   }
@@ -95,12 +95,11 @@ Status Mpu6050Driver::initialize(std::uint16_t samplingRateHertz) noexcept {
   Status status = writeRegister(kPowerManagement, 0x00);
   if (!status.ok()) return status;
   esp_rom_delay_us(10000);
-  const auto divider = static_cast<std::uint8_t>(1000U / samplingRateHertz - 1U);
-  if (
-      !(status = writeRegister(kConfig, 0x03)).ok() ||
+  const auto divider = static_cast<std::uint8_t>(1000U / profile.sampleRateHz - 1U);
+  if (!(status = writeRegister(kConfig, profile.dlpfCode)).ok() ||
       !(status = writeRegister(kSampleRateDivider, divider)).ok() ||
-      !(status = writeRegister(kAccelConfig, 0x10)).ok() ||
-      !(status = writeRegister(kGyroConfig, 0x08)).ok()) {
+      !(status = writeRegister(kAccelConfig, core::accelRegisterBits(profile.accelRange))).ok() ||
+      !(status = writeRegister(kGyroConfig, core::gyroRegisterBits(profile.gyroRange))).ok()) {
     return status;
   }
 
@@ -118,11 +117,21 @@ Status Mpu6050Driver::initialize(std::uint16_t samplingRateHertz) noexcept {
       !(status = readRegisters(kGyroConfig, &gyro, 1)).ok()) {
     return status;
   }
-  if (!hasMpu6050RegisterProfile(power, dlpf, configuredDivider, accel, gyro, divider))
+  if (!hasMpu6050RegisterProfile(power, dlpf, configuredDivider, accel, gyro, divider, profile))
     return Status::failure(Error::NotReady, identity);
   detectedAddress_ = selectedAddress;
   detectedIdentity_ = identity;
   configuredDivider_ = divider;
+  effectiveProfile_ = {profile,
+                       identity,
+                       selectedAddress,
+                       accel,
+                       gyro,
+                       dlpf,
+                       configuredDivider,
+                       core::accelLsbPerG(profile.accelRange),
+                       core::gyroLsbPerDpsX10(profile.gyroRange),
+                       true};
 
   if (config_.dataReady != GPIO_NUM_NC) {
     gpio_config_t gpioConfig{};
@@ -222,7 +231,8 @@ Status Mpu6050Driver::health() noexcept {
       !(status = readRegisters(kAccelConfig, &accel, 1)).ok() ||
       !(status = readRegisters(kGyroConfig, &gyro, 1)).ok())
     return status;
-  return hasMpu6050RegisterProfile(power, dlpf, divider, accel, gyro, configuredDivider_)
+  return hasMpu6050RegisterProfile(power, dlpf, divider, accel, gyro, configuredDivider_,
+                                   effectiveProfile_.requested)
              ? Status::success()
              : Status::failure(Error::IoFailure, detectedIdentity_);
 }

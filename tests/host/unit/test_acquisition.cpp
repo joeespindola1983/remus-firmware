@@ -4,6 +4,7 @@
 #include "FakeImu.hpp"
 #include "remus/acquisition/AcquisitionPipeline.hpp"
 #include "remus/acquisition/BatchBuilder.hpp"
+#include "remus/acquisition/ImuFlags.hpp"
 #include "remus/acquisition/Sampler.hpp"
 #include "remus/platform/esp32/Mpu6050Compatibility.hpp"
 
@@ -33,7 +34,7 @@ void testSamplerUsesRealReadTimeAndReportsMissedPeriods() {
   remus::test::FakeClock clock;
   remus::test::FakeImu imu;
   remus::acquisition::Sampler sampler;
-  EXPECT(sampler.initialize({200}, imu, clock).ok());
+  EXPECT(sampler.initialize({remus::core::computerImuProfile()}, imu, clock).ok());
   remus::acquisition::ImuSample sample{};
   EXPECT(!sampler.pollDue(4999, sample).sampleReady);
   clock.setUs(5100);
@@ -51,7 +52,7 @@ void testReadFailureConsumesIndexWithoutFabricatingSample() {
   remus::test::FakeClock clock;
   remus::test::FakeImu imu;
   remus::acquisition::Sampler sampler;
-  EXPECT(sampler.initialize({200}, imu, clock).ok());
+  EXPECT(sampler.initialize({remus::core::computerImuProfile()}, imu, clock).ok());
   remus::acquisition::ImuSample sample{};
   imu.readStatus = remus::Status::failure(remus::Error::IoFailure);
   clock.setUs(5000);
@@ -91,7 +92,7 @@ void testSharedPipelinePublishesTenSamplesToRoleSpecificSink() {
   remus::test::FakeImu imu;
   CollectingSink sink;
   remus::acquisition::AcquisitionPipeline pipeline;
-  EXPECT(pipeline.initialize({200}, imu, clock, sink).ok());
+  EXPECT(pipeline.initialize({remus::core::computerImuProfile()}, imu, clock, sink).ok());
   clock.setUs(1000000);
   EXPECT(pipeline.startSession(77).ok());
   EXPECT(!pipeline.poll(1004999).sampleReady);
@@ -112,8 +113,26 @@ void testMpuCompatibilityUsesFunctionalConfigurationNotIdentityAlone() {
   EXPECT(isCanonicalMpu6050Identity(0x68));
   EXPECT(isCanonicalMpu6050Identity(0x69));
   EXPECT(!isCanonicalMpu6050Identity(0x74));
-  EXPECT(hasMpu6050RegisterProfile(0x00, 0x03, 0x04, 0x10, 0x08, 0x04));
-  EXPECT(!hasMpu6050RegisterProfile(0x40, 0x03, 0x04, 0x10, 0x08, 0x04));
+  const auto profile = remus::core::bladeImuProfile();
+  EXPECT(hasMpu6050RegisterProfile(0x00, 0x03, 0x04, 0x18, 0x18, 0x04, profile));
+  EXPECT(!hasMpu6050RegisterProfile(0x00, 0x03, 0x04, 0x10, 0x08, 0x04, profile));
+  EXPECT(!hasMpu6050RegisterProfile(0x40, 0x03, 0x04, 0x18, 0x18, 0x04, profile));
+}
+
+void testSamplerFlagsNearRailWithoutChangingRawValues() {
+  remus::test::FakeClock clock;
+  remus::test::FakeImu imu;
+  imu.next = {32112, -32768, 123, 32000, 32112, -32768};
+  remus::acquisition::Sampler sampler;
+  EXPECT(sampler.initialize({remus::core::bladeImuProfile()}, imu, clock).ok());
+  remus::acquisition::ImuSample sample{};
+  clock.setUs(5000);
+  EXPECT(sampler.pollDue(5000, sample).sampleReady);
+  EXPECT(sample.raw.ax == 32112);
+  EXPECT(sample.raw.ay == -32768);
+  EXPECT(sample.raw.gy == 32112);
+  EXPECT((sample.flags & remus::acquisition::kImuFlagAccelNearRail) != 0);
+  EXPECT((sample.flags & remus::acquisition::kImuFlagGyroNearRail) != 0);
 }
 }  // namespace
 
@@ -123,5 +142,6 @@ int main() {
   testBatchBuilderClosesTenSamplesAndNeverHidesGap();
   testSharedPipelinePublishesTenSamplesToRoleSpecificSink();
   testMpuCompatibilityUsesFunctionalConfigurationNotIdentityAlone();
+  testSamplerFlagsNearRailWithoutChangingRawValues();
   return failures == 0 ? 0 : 1;
 }

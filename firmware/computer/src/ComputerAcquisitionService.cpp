@@ -5,6 +5,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "remus/link/MessageCodec.hpp"
+#include "remus/link/SourceManifestBuilder.hpp"
 
 namespace remus::computer {
 namespace {
@@ -18,12 +19,13 @@ NativeTimestampUs ComputerAcquisitionService::EspTimerClock::monotonicUs() const
 }
 
 Status ComputerAcquisitionService::start(RecordingId recordingId) noexcept {
-  auto status = pipeline_.initialize({200}, imu_, clock_, *this);
+  auto status = pipeline_.initialize({core::computerImuProfile()}, imu_, clock_, *this);
   if (!status.ok()) return status;
   status = pipeline_.startSession(recordingId);
   if (!status.ok()) return status;
-  link::SourceManifest manifest{computerId_, bootId_, imu_.detectedIdentity(), 8, 500, 42, 200,
-                                0, 0, 0, 0, 0, 4096, 655};
+  link::SourceManifest manifest{};
+  status = link::buildSourceManifest(computerId_, bootId_, imu_.effectiveProfile(), manifest);
+  if (!status.ok()) return status;
   std::uint8_t manifestPayload[link::kSourceManifestPayloadBytes]{};
   std::size_t manifestSize = 0;
   status = link::MessageCodec::encode(manifest, manifestPayload, sizeof(manifestPayload),
@@ -34,7 +36,8 @@ Status ComputerAcquisitionService::start(RecordingId recordingId) noexcept {
   task_ = xTaskCreateStatic(taskEntry, "computer_imu", 4096, this, 12, taskStack_, &taskBuffer_);
   if (task_ == nullptr) return Status::failure(Error::NotReady);
   ESP_LOGW(kTag,
-           "ready source=computer_local_imu rate_hz=200 address=0x%02x identity=0x%02x "
+           "ready source=computer_local_imu rate_hz=200 accel_fs_g=8 gyro_fs_dps=1000 "
+           "address=0x%02x identity=0x%02x "
            "mode=software_timer drdy_gpio=unassigned fifo_supported=true",
            static_cast<unsigned>(imu_.detectedAddress()),
            static_cast<unsigned>(imu_.detectedIdentity()));
