@@ -58,6 +58,10 @@ void put16(std::uint8_t* p, std::uint16_t value) noexcept {
   p[0] = static_cast<std::uint8_t>(value);
   p[1] = static_cast<std::uint8_t>(value >> 8);
 }
+void put32(std::uint8_t* p, std::uint32_t value) noexcept {
+  for (unsigned index = 0; index < 4; ++index)
+    p[index] = static_cast<std::uint8_t>(value >> (index * 8));
+}
 void put64(std::uint8_t* p, std::uint64_t value) noexcept {
   for (unsigned index = 0; index < 8; ++index)
     p[index] = static_cast<std::uint8_t>(value >> (index * 8));
@@ -280,11 +284,88 @@ bool SdDiagnosticLogger::enqueueSourceManifest(std::uint64_t originId,
   return true;
 }
 
+bool SdDiagnosticLogger::enqueueGap(std::uint64_t originId,
+                                    std::uint32_t originBootId,
+                                    std::uint32_t fromBatchSeq,
+                                    std::uint32_t throughBatchSeq,
+                                    std::uint64_t firstSampleIndex,
+                                    std::uint16_t reason) noexcept {
+  if (!rmsHealthy_.load() || rmsQueue_ == nullptr || originId == 0 || originBootId == 0 ||
+      fromBatchSeq > throughBatchSeq) {
+    ++rmsDropped_;
+    return false;
+  }
+  RmsEntry entry{};
+  entry.kind = RmsEntryKind::Gap;
+  entry.gap = {originId, originBootId, fromBatchSeq, throughBatchSeq,
+               firstSampleIndex, reason};
+  if (xQueueSend(rmsQueue_, &entry, 0) != pdTRUE) {
+    ++rmsDropped_;
+    return false;
+  }
+  ++rmsQueued_;
+  updateHighWater(rmsQueueHighWater_, uxQueueMessagesWaiting(rmsQueue_));
+  if (task_ != nullptr) xTaskNotifyGive(task_);
+  return true;
+}
+
 SdDiagnosticLoggerStats SdDiagnosticLogger::stats() const noexcept {
   return {queued_.load(), dropped_.load(), writeFailures_.load(), rotations_.load(),
           rmsQueued_.load(), rmsWritten_.load(), rmsDropped_.load(),
           rmsWriteFailures_.load(), rmsCheckpoints_.load(), rmsBytes_.load(),
           diagnosticQueueHighWater_.load(), rmsQueueHighWater_.load()};
+}
+
+bool SdDiagnosticLogger::checkpointedThrough(std::uint64_t originId,
+                                             std::uint32_t originBootId,
+                                             std::uint32_t& batchSeq) const noexcept {
+  for (const auto& progress : checkpointProgress_) {
+    if (progress.originId.load(std::memory_order_acquire) == originId &&
+        progress.originBootId.load(std::memory_order_relaxed) == originBootId &&
+        progress.publishedValid.load(std::memory_order_acquire)) {
+      batchSeq = progress.publishedThrough.load(std::memory_order_relaxed);
+      return true;
+    }
+  }
+  return false;
+}
+
+void SdDiagnosticLogger::markBatchWritten(std::uint64_t originId,
+                                          std::uint32_t originBootId,
+                                          std::uint32_t batchSeq) noexcept {
+  CheckpointProgress* selected = nullptr;
+  for (auto& progress : checkpointProgress_) {
+    const auto existingId = progress.originId.load(std::memory_order_relaxed);
+    if (existingId == originId &&
+        progress.originBootId.load(std::memory_order_relaxed) == originBootId) {
+      selected = &progress;
+      break;
+    }
+    if (existingId == 0 && selected == nullptr) selected = &progress;
+  }
+  if (selected == nullptr) return;
+  if (selected->originId.load(std::memory_order_relaxed) == 0) {
+    selected->originBootId.store(originBootId, std::memory_order_relaxed);
+    selected->originId.store(originId, std::memory_order_release);
+  }
+  if (selected->writtenValid && batchSeq <= selected->writtenThrough) return;
+  const std::uint32_t base = selected->writtenValid ? selected->writtenThrough + 1U : 0U;
+  const std::uint32_t offset = batchSeq - base;
+  if (offset >= 32) return;
+  selected->writtenBitmap |= std::uint32_t{1} << offset;
+  while ((selected->writtenBitmap & 1U) != 0) {
+    selected->writtenThrough = selected->writtenValid ? selected->writtenThrough + 1U : 0U;
+    selected->writtenValid = true;
+    selected->writtenBitmap >>= 1U;
+  }
+}
+
+void SdDiagnosticLogger::publishCheckpoints() noexcept {
+  for (auto& progress : checkpointProgress_) {
+    if (!progress.writtenValid) continue;
+    progress.publishedThrough.store(progress.writtenThrough, std::memory_order_relaxed);
+    progress.publishedValid.store(true, std::memory_order_release);
+  }
 }
 
 void SdDiagnosticLogger::taskEntry(void* context) noexcept {
@@ -326,6 +407,42 @@ void SdDiagnosticLogger::run() noexcept {
         rmsBytesSinceSync_ += encodedSize;
         continue;
       }
+      if (entry.kind == RmsEntryKind::Gap) {
+        // GAP_NOTICE v1 carries the first missing sample but not the final
+        // sample index. Preserve that uncertainty explicitly: UINT64_MAX plus
+        // flag bit 0 means lastSampleIndex is unavailable, never fabricated.
+        put32(payload, entry.gap.fromBatchSeq);
+        put32(payload + 4, entry.gap.throughBatchSeq);
+        put64(payload + 8, entry.gap.firstSampleIndex);
+        put64(payload + 16, UINT64_MAX);
+        put16(payload + 24, entry.gap.reason);
+        put16(payload + 26, 1);
+        storage::Rms1Record record{storage::Rms1RecordType::Gap,
+                                   ++rmsOrdinal_,
+                                   static_cast<std::uint64_t>(esp_timer_get_time()),
+                                   entry.gap.originId,
+                                   entry.gap.originBootId,
+                                   entry.gap.fromBatchSeq,
+                                   payload,
+                                   28};
+        std::uint8_t encoded[storage::kRms1MaximumRecordBytes]{};
+        std::size_t encodedSize = 0;
+        if (!rmsHealthy_.load() || rmsFile_ == nullptr ||
+            !storage::encodeRecord(record, encoded, sizeof(encoded), encodedSize).ok() ||
+            std::fwrite(encoded, 1, encodedSize, rmsFile_) != encodedSize) {
+          ++rmsWriteFailures_;
+          rmsHealthy_.store(false);
+          continue;
+        }
+        ++rmsWritten_;
+        rmsBytes_.fetch_add(encodedSize);
+        rmsBytesSinceSync_ += encodedSize;
+        for (std::uint32_t sequence = entry.gap.fromBatchSeq;; ++sequence) {
+          markBatchWritten(entry.gap.originId, entry.gap.originBootId, sequence);
+          if (sequence == entry.gap.throughBatchSeq) break;
+        }
+        continue;
+      }
       put64(payload, entry.imu.originMonoUs);
       put64(payload + 8, entry.imu.ingestPcMonoUs);
       payload[16] = static_cast<std::uint8_t>(entry.imu.rssiDbm);
@@ -352,6 +469,7 @@ void SdDiagnosticLogger::run() noexcept {
       ++rmsWritten_;
       rmsBytes_.fetch_add(encodedSize);
       rmsBytesSinceSync_ += encodedSize;
+      markBatchWritten(entry.imu.originId, entry.imu.originBootId, entry.imu.batchSeq);
     }
 
     if (xQueueReceive(diagnosticQueue_, &diagnostic, 0) == pdTRUE) {
@@ -374,6 +492,7 @@ void SdDiagnosticLogger::run() noexcept {
           rmsHealthy_.store(false);
         } else {
           ++rmsCheckpoints_;
+          publishCheckpoints();
         }
         rmsBytesSinceSync_ = 0;
         rmsLastSyncUs_ = now;

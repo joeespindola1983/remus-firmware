@@ -15,6 +15,15 @@ namespace {
 constexpr char kTag[] = "blade_radio";
 constexpr MacAddress kBroadcast{{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}};
 }  // namespace
+BladeReplayStats BladeRadioService::replayStats() const noexcept {
+  return {replayDepth_.load(),
+          static_cast<std::uint32_t>(replay_.capacity()),
+          replayOverflows_.load(),
+          ackWindows_.load(),
+          replayQueued_.load(),
+          replayUnavailable_.load(),
+          gapNotices_.load()};
+}
 Status BladeRadioService::start() noexcept {
   esp_err_t nvs = nvs_flash_init();
   if (nvs != ESP_OK) return Status::failure(Error::NotReady, nvs);
@@ -90,6 +99,13 @@ void BladeRadioService::run() noexcept {
       } else {
         sendDataBatch(e);
       }
+    RecordingId lostRecordingId = 0;
+    link::ReplayGap lostGap{};
+    if (takeDroppedGap(lostRecordingId, lostGap) &&
+        lostRecordingId == state_.recordingId()) {
+      replay_.recordLostGap(lostRecordingId, lostGap);
+      sendGapNotice(lostGap, 3);
+    }
     }
     const auto now = esp_timer_get_time();
     if (state_.state() == link::BladeLinkState::HelloReady && now - lastHello >= 800000) {
@@ -155,9 +171,18 @@ void BladeRadioService::handleReceive(const Event& e) noexcept {
            .decode(e.bytes, e.size, pairKeys_.pairAuthKey.data(), pairKeys_.pairAuthKey.size(),
                    frame)
            .ok() ||
-      frame.header.type != link::MessageType::Bind || frame.header.networkId != networkId_ ||
-      frame.header.senderId != state_.computerId())
+      frame.header.networkId != networkId_ || frame.header.senderId != state_.computerId() ||
+      frame.header.senderBootId != state_.computerBootId())
     return;
+  if (frame.header.type == link::MessageType::AckWindow) {
+    handleAckWindow(frame);
+    return;
+  }
+  if (frame.header.type == link::MessageType::ReplayRequest) {
+    handleReplayRequest(frame);
+    return;
+  }
+  if (frame.header.type != link::MessageType::Bind) return;
   link::Bind bind{};
   if (!link::MessageCodec::decode(frame.payload.data(), frame.payloadSize, bind).ok() ||
       bind.bladeId != deviceId_ || bind.bladeBootId != bootId_)
@@ -231,13 +256,71 @@ Status BladeRadioService::queueDataBatch(RecordingId recordingId, NativeTimestam
       link::MessageCodec::encode(batch, event.bytes, sizeof(event.bytes), payloadSize);
   if (!status.ok()) return status;
   event.size = static_cast<std::uint16_t>(payloadSize);
-  return enqueue(event) ? Status::success() : Status::failure(Error::QueueFull);
+  if (enqueue(event)) return Status::success();
+  recordDroppedBatch(recordingId, batch);
+  return Status::failure(Error::QueueFull);
+}
+
+void BladeRadioService::recordDroppedBatch(RecordingId recordingId,
+                                           const link::DataBatch& batch) noexcept {
+  portENTER_CRITICAL(&pendingGapMux_);
+  if (pendingGapCount_ != 0) {
+    PendingGap& last = pendingGaps_[pendingGapCount_ - 1];
+    if (last.recordingId == recordingId &&
+        last.gap.throughSeq + 1U == batch.batchSeq) {
+      last.gap.throughSeq = batch.batchSeq;
+      portEXIT_CRITICAL(&pendingGapMux_);
+      return;
+    }
+  }
+  if (pendingGapCount_ < kPendingGapCapacity) {
+    pendingGaps_[pendingGapCount_++] =
+        {recordingId, {true, batch.batchSeq, batch.batchSeq, batch.firstSampleIndex}};
+  } else {
+    ++replayUnavailable_;
+  }
+  portEXIT_CRITICAL(&pendingGapMux_);
+}
+
+bool BladeRadioService::takeDroppedGap(RecordingId& recordingId,
+                                       link::ReplayGap& gap) noexcept {
+  portENTER_CRITICAL(&pendingGapMux_);
+  if (pendingGapCount_ == 0) {
+    portEXIT_CRITICAL(&pendingGapMux_);
+    return false;
+  }
+  recordingId = pendingGaps_[0].recordingId;
+  gap = pendingGaps_[0].gap;
+  for (std::size_t index = 1; index < pendingGapCount_; ++index)
+    pendingGaps_[index - 1] = pendingGaps_[index];
+  --pendingGapCount_;
+  portEXIT_CRITICAL(&pendingGapMux_);
+  return true;
 }
 
 void BladeRadioService::sendDataBatch(const Event& event) noexcept {
   if (state_.state() != link::BladeLinkState::Bound ||
       event.recordingId != state_.recordingId())
     return;
+  link::DataBatch batch{};
+  if (!link::MessageCodec::decode(event.bytes, event.size, batch).ok()) return;
+  link::ReplayBatch retained{};
+  retained.recordingId = event.recordingId;
+  retained.batchSeq = batch.batchSeq;
+  retained.firstSampleIndex = batch.firstSampleIndex;
+  retained.originMonoUs = event.originMonoUs;
+  retained.payloadSize = event.size;
+  std::memcpy(retained.payload.data(), event.bytes, event.size);
+  const auto stored = replay_.append(retained);
+  if (!stored.status.ok()) {
+    ESP_LOGE(kTag, "batch_drop reason=replay_rejected batch_seq=%lu",
+             static_cast<unsigned long>(batch.batchSeq));
+    return;
+  }
+  replayDepth_.store(static_cast<std::uint32_t>(replay_.size()));
+  replayOverflows_.store(replay_.overflowCount());
+  if (stored.gap.valid) sendGapNotice(stored.gap, 1);
+
   link::FrameHeader header{link::MessageType::DataBatch,
                            0,
                            networkId_,
@@ -255,6 +338,89 @@ void BladeRadioService::sendDataBatch(const Event& event) noexcept {
     if (!queued.ok())
       ESP_LOGW(kTag, "batch_drop reason=tx_scheduler_queue error=%u",
                static_cast<unsigned>(queued.error));
+  }
+}
+
+void BladeRadioService::sendReplay(const link::ReplayBatch& replay) noexcept {
+  link::FrameHeader header{link::MessageType::DataBatch,
+                           0,
+                           networkId_,
+                           deviceId_,
+                           bootId_,
+                           replay.recordingId,
+                           ++messageSeq_,
+                           replay.originMonoUs};
+  link::EncodedFrame frame{};
+  if (codec_.encode(header, replay.payload.data(), replay.payloadSize,
+                    pairKeys_.pairAuthKey.data(), pairKeys_.pairAuthKey.size(), frame).ok() &&
+      tx_.enqueue(computerAddress_, frame.bytes.data(), frame.size).ok()) {
+    ++replayQueued_;
+    ESP_LOGI(kTag, "replay queued batch_seq=%lu",
+             static_cast<unsigned long>(replay.batchSeq));
+  }
+}
+
+void BladeRadioService::sendGapNotice(const link::ReplayGap& gap,
+                                      std::uint16_t reason) noexcept {
+  if (!gap.valid || state_.recordingId() == 0) return;
+  const link::GapNotice notice{deviceId_, bootId_, gap.fromSeq, gap.throughSeq,
+                               gap.firstSampleIndex, reason};
+  std::uint8_t payload[link::kGapNoticePayloadBytes]{};
+  std::size_t payloadSize = 0;
+  if (!link::MessageCodec::encode(notice, payload, sizeof(payload), payloadSize).ok()) return;
+  const link::FrameHeader header{link::MessageType::GapNotice,
+                                 0,
+                                 networkId_,
+                                 deviceId_,
+                                 bootId_,
+                                 state_.recordingId(),
+                                 ++messageSeq_,
+                                 static_cast<NativeTimestampUs>(esp_timer_get_time())};
+  link::EncodedFrame frame{};
+  if (codec_.encode(header, payload, payloadSize, pairKeys_.pairAuthKey.data(),
+                    pairKeys_.pairAuthKey.size(), frame).ok() &&
+      tx_.enqueue(computerAddress_, frame.bytes.data(), frame.size).ok())
+    ++gapNotices_;
+}
+
+void BladeRadioService::handleAckWindow(const link::DecodedFrame& frame) noexcept {
+  if (state_.state() != link::BladeLinkState::Bound ||
+      frame.header.recordingId != state_.recordingId())
+    return;
+  link::AckWindow ack{};
+  if (!link::MessageCodec::decode(frame.payload.data(), frame.payloadSize, ack).ok() ||
+      ack.bladeId != deviceId_ || ack.bladeBootId != bootId_)
+    return;
+  if (ack.acceptedValid) replay_.markAcceptedThrough(frame.header.recordingId, ack.acceptedThrough);
+  if (ack.checkpointedValid)
+    replay_.markCheckpointedThrough(frame.header.recordingId, ack.checkpointedThrough);
+  ++ackWindows_;
+  replayDepth_.store(static_cast<std::uint32_t>(replay_.size()));
+}
+
+void BladeRadioService::handleReplayRequest(const link::DecodedFrame& frame) noexcept {
+  if (state_.state() != link::BladeLinkState::Bound ||
+      frame.header.recordingId != state_.recordingId())
+    return;
+  link::ReplayRequest request{};
+  if (!link::MessageCodec::decode(frame.payload.data(), frame.payloadSize, request).ok() ||
+      request.bladeId != deviceId_ || request.bladeBootId != bootId_)
+    return;
+  for (std::uint32_t offset = 0; offset < request.count; ++offset) {
+    const std::uint32_t sequence = request.firstSeq + offset;
+    link::ReplayBatch replay{};
+    if (replay_.prepareReplay(frame.header.recordingId, sequence, replay).ok()) {
+      sendReplay(replay);
+      continue;
+    }
+    link::ReplayGap gap{};
+    if (replay_.knownLostGap(frame.header.recordingId, sequence, gap)) {
+      sendGapNotice(gap, 2);
+      break;
+    }
+    ++replayUnavailable_;
+    ESP_LOGW(kTag, "replay unavailable batch_seq=%lu",
+             static_cast<unsigned long>(sequence));
   }
 }
 void BladeRadioService::sendHello() noexcept {

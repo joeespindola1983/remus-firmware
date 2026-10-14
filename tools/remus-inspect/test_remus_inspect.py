@@ -66,6 +66,21 @@ class InspectorTest(unittest.TestCase):
         self.assertEqual(manifest["lsb_per_g"], 4096)
         self.assertEqual(manifest["lsb_per_dps_x10"], 655)
 
+    def test_decodes_explicit_gap_with_unknown_last_sample(self):
+        payload = struct.pack("<IIQQHH", 7, 9, 70, 0xFFFFFFFFFFFFFFFF, 2, 1)
+        record = MODULE.Record(64, MODULE.GAP, 1, 0, 88, 99, 7, payload)
+        gap = MODULE.decode_gap(record)
+        self.assertEqual(gap["from_batch"], 7)
+        self.assertEqual(gap["through_batch"], 9)
+        self.assertEqual(gap["first_sample"], 70)
+        self.assertIsNone(gap["last_sample"])
+
+    def test_rejects_invalid_explicit_gap(self):
+        payload = struct.pack("<IIQQHH", 9, 7, 90, 70, 2, 0)
+        record = MODULE.Record(64, MODULE.GAP, 1, 0, 88, 99, 9, payload)
+        with self.assertRaises(MODULE.RmsError):
+            MODULE.decode_gap(record)
+
 
 if __name__ == "__main__":
     unittest.main()

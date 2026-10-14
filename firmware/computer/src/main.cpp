@@ -140,6 +140,7 @@ extern "C" void app_main(void) {
     const remus::diagnostics::HealthSnapshot health = runtime.healthSnapshot();
     const remus::acquisition::SamplingMetrics imu = acquisitionService.metrics();
     const remus::computer::SdDiagnosticLoggerStats sdLogStats = sdLogger.stats();
+    const remus::computer::ComputerRecoveryStats recovery = radioService.recoveryStats();
     char healthDetails[512]{};
     std::snprintf(healthDetails, sizeof(healthDetails),
                   "uptime_ms=%llu runtime_starts=%lu queue_overflows=%lu pool_exhaustions=%lu "
@@ -179,6 +180,21 @@ extern "C" void app_main(void) {
         !sdLogger.enqueue(remus::computer::DiagnosticLogLevel::Info, "health", healthDetails)) {
       ESP_LOGW(kLogTag, "SD diagnostic log queue full; entry dropped");
     }
+    char recoveryDetails[256]{};
+    std::snprintf(recoveryDetails, sizeof(recoveryDetails),
+                  "ack_frames_queued=%lu checkpoint_acks_queued=%lu "
+                  "replay_requests_queued=%lu duplicate_batches=%lu "
+                  "outside_window_batches=%lu unrecoverable_gaps=%lu",
+                  static_cast<unsigned long>(recovery.ackFramesQueued),
+                  static_cast<unsigned long>(recovery.checkpointAcksQueued),
+                  static_cast<unsigned long>(recovery.replayRequestsQueued),
+                  static_cast<unsigned long>(recovery.duplicateBatches),
+                  static_cast<unsigned long>(recovery.outsideWindowBatches),
+                  static_cast<unsigned long>(recovery.unrecoverableGaps));
+    ESP_LOGI(kLogTag, "recovery %s", recoveryDetails);
+    if (sdLogger.isReady())
+      sdLogger.enqueue(remus::computer::DiagnosticLogLevel::Info, "radio_recovery",
+                       recoveryDetails);
     vTaskDelay(kHealthLogInterval);
   }
 }
