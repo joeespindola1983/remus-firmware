@@ -46,7 +46,7 @@ extern "C" void app_main(void) {
              static_cast<unsigned>(sdStatus.error), static_cast<unsigned long>(sdStatus.detail));
   } else {
     const esp_app_desc_t* app = esp_app_get_description();
-    char bootDetails[320]{};
+    static char bootDetails[320]{};
     std::snprintf(bootDetails, sizeof(bootDetails),
                   "role=computer reset_reason=%u project=%s version=%s idf=%s "
                   "build_date=%s build_time=%s free_heap=%lu minimum_free_heap=%lu",
@@ -64,7 +64,7 @@ extern "C" void app_main(void) {
   if (!status.ok()) {
     ESP_LOGE(kLogTag, "runtime start failed: error=%u detail=%lu",
              static_cast<unsigned>(status.error), static_cast<unsigned long>(status.detail));
-    char failureDetails[96]{};
+    static char failureDetails[96]{};
     std::snprintf(failureDetails, sizeof(failureDetails), "error=%u detail=%lu",
                   static_cast<unsigned>(status.error), static_cast<unsigned long>(status.detail));
     if (sdLogger.isReady()) {
@@ -118,7 +118,7 @@ extern "C" void app_main(void) {
              static_cast<unsigned>(acquisitionStatus.error),
              static_cast<unsigned long>(acquisitionStatus.detail));
     if (sdLogger.isReady()) {
-      char failureDetails[112]{};
+      static char failureDetails[112]{};
       std::snprintf(failureDetails, sizeof(failureDetails),
                     "error=%u detail=%lu sda=6 scl=5 address=0x68",
                     static_cast<unsigned>(acquisitionStatus.error),
@@ -127,7 +127,7 @@ extern "C" void app_main(void) {
                        "local_imu_start_failed", failureDetails);
     }
   } else if (sdLogger.isReady()) {
-    char readyDetails[144]{};
+    static char readyDetails[144]{};
     std::snprintf(readyDetails, sizeof(readyDetails),
                   "rate_hz=200 sda=6 scl=5 address=0x%02x identity=0x%02x mode=software_timer",
                   static_cast<unsigned>(acquisitionService.detectedAddress()),
@@ -142,7 +142,7 @@ extern "C" void app_main(void) {
     const remus::acquisition::SamplingMetrics imu = acquisitionService.metrics();
     const remus::computer::SdDiagnosticLoggerStats sdLogStats = sdLogger.stats();
     const remus::computer::ComputerRecoveryStats recovery = radioService.recoveryStats();
-    char healthDetails[512]{};
+    static char healthDetails[512]{};
     std::snprintf(healthDetails, sizeof(healthDetails),
                   "uptime_ms=%llu runtime_starts=%lu queue_overflows=%lu pool_exhaustions=%lu "
                   "invalid_handle_releases=%lu free_heap=%lu minimum_free_heap=%lu "
@@ -180,7 +180,7 @@ extern "C" void app_main(void) {
         !sdLogger.enqueue(remus::computer::DiagnosticLogLevel::Info, "health", healthDetails)) {
       ESP_LOGW(kLogTag, "SD diagnostic log queue full; entry dropped");
     }
-    char recoveryDetails[256]{};
+    static char recoveryDetails[256]{};
     std::snprintf(recoveryDetails, sizeof(recoveryDetails),
                   "ack_frames_queued=%lu checkpoint_acks_queued=%lu "
                   "replay_requests_queued=%lu duplicate_batches=%lu "
@@ -207,7 +207,7 @@ extern "C" void app_main(void) {
         recovery.duplicateBatches,
         recovery.outsideWindowBatches,
         recovery.unrecoverableGaps};
-    char operationalProblems[384]{};
+    static char operationalProblems[384]{};
     if (remus::diagnostics::formatNewOperationalProblems(
             previousProblems, currentProblems, operationalProblems,
             sizeof(operationalProblems)))
