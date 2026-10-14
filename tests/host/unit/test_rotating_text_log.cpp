@@ -117,6 +117,27 @@ void testOpenRotatesWhenMaximumLineCannotFit() {
   std::filesystem::remove_all(directory);
 }
 
+void testCanDeferDurabilityToPeriodicCheckpoint() {
+  const std::filesystem::path directory =
+      std::filesystem::temp_directory_path() /
+      ("remus-rotating-log-deferred-sync-" +
+       std::to_string(static_cast<long>(getpid())));
+  std::filesystem::create_directories(directory);
+  const std::filesystem::path active = directory / "active.log";
+  const std::filesystem::path archive = directory / "archive.log";
+
+  remus::diagnostics::RotatingTextLog log(
+      {active.c_str(), archive.c_str(), 64, 24, false});
+  EXPECT(log.open().ok());
+  EXPECT(log.appendLine("batched-entry").ok());
+  EXPECT(log.stats().syncs == 0);
+  EXPECT(log.sync().ok());
+  EXPECT(log.stats().syncs == 1);
+  EXPECT(log.close().ok());
+
+  std::filesystem::remove_all(directory);
+}
+
 }  // namespace
 
 int main() {
@@ -124,6 +145,7 @@ int main() {
   testRejectsOversizedLine();
   testReopenAppendsExistingLog();
   testOpenRotatesWhenMaximumLineCannotFit();
+  testCanDeferDurabilityToPeriodicCheckpoint();
   if (failures == 0) {
     std::cout << "rotating text log tests passed\n";
   }

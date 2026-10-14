@@ -27,6 +27,17 @@ constexpr int kSdMosiGpio = 10;
 constexpr int kSdClockGpio = 20;
 constexpr int kSdChipSelectGpio = 21;
 constexpr int kSdFrequencyKhz = 10000;
+constexpr std::int64_t kSyncIntervalUs = 1000000;
+constexpr std::size_t kRmsBurstLimit = 24;
+
+void updateHighWater(std::atomic<std::uint32_t>& highWater,
+                     UBaseType_t currentDepth) noexcept {
+  std::uint32_t observed = highWater.load(std::memory_order_relaxed);
+  const auto depth = static_cast<std::uint32_t>(currentDepth);
+  while (depth > observed &&
+         !highWater.compare_exchange_weak(observed, depth, std::memory_order_relaxed)) {
+  }
+}
 
 const char* levelName(DiagnosticLogLevel level) noexcept {
   switch (level) {
@@ -100,8 +111,11 @@ Status SdDiagnosticLogger::start() noexcept {
     return openStatus;
   }
 
-  queue_ = xQueueCreateStatic(kQueueCapacity, sizeof(LogEntry), queueStorage_, &queueBuffer_);
-  if (queue_ == nullptr) {
+  diagnosticQueue_ = xQueueCreateStatic(kDiagnosticQueueCapacity, sizeof(DiagnosticEntry),
+                                        diagnosticQueueStorage_, &diagnosticQueueBuffer_);
+  rmsQueue_ = xQueueCreateStatic(kRmsQueueCapacity, sizeof(RmsEntry), rmsQueueStorage_,
+                                 &rmsQueueBuffer_);
+  if (diagnosticQueue_ == nullptr || rmsQueue_ == nullptr) {
     log_.close();
     esp_vfs_fat_sdcard_unmount(kMountPoint, card_);
     spi_bus_free(spiHost);
@@ -115,20 +129,23 @@ Status SdDiagnosticLogger::start() noexcept {
     esp_vfs_fat_sdcard_unmount(kMountPoint, card_);
     spi_bus_free(spiHost);
     card_ = nullptr;
-    queue_ = nullptr;
+    diagnosticQueue_ = nullptr;
+    rmsQueue_ = nullptr;
     return Status::failure(Error::StorageUnavailable);
   }
 
   // ESP-IDF expresses task stack size in bytes and ESP32-C3 defines
   // StackType_t as uint8_t. FAT/stdio plus the bounded RMS1 encode buffers
   // exceed 2 KiB, so reserve the complete 8 KiB backing buffer.
-  if (xTaskCreateStatic(taskEntry, "sd_diag_log", kTaskStackBytes, this,
-                        tskIDLE_PRIORITY + 1, taskStack_, &taskBuffer_) == nullptr) {
+  task_ = xTaskCreateStatic(taskEntry, "sd_writer", kTaskStackBytes, this, 7,
+                            taskStack_, &taskBuffer_);
+  if (task_ == nullptr) {
     log_.close();
     esp_vfs_fat_sdcard_unmount(kMountPoint, card_);
     spi_bus_free(spiHost);
     card_ = nullptr;
-    queue_ = nullptr;
+    diagnosticQueue_ = nullptr;
+    rmsQueue_ = nullptr;
     filesystemMutex_ = nullptr;
     return Status::failure(Error::StorageUnavailable);
   }
@@ -139,22 +156,23 @@ Status SdDiagnosticLogger::start() noexcept {
 
 bool SdDiagnosticLogger::enqueue(DiagnosticLogLevel level, const char* event,
                                  const char* details) noexcept {
-  if (!ready_ || queue_ == nullptr || event == nullptr || details == nullptr) {
+  if (!ready_ || diagnosticQueue_ == nullptr || event == nullptr || details == nullptr) {
     ++dropped_;
     return false;
   }
 
-  LogEntry entry{};
-  entry.kind = EntryKind::Diagnostic;
+  DiagnosticEntry entry{};
   const int length = std::snprintf(
       entry.line, sizeof(entry.line), "mono_us=%lld level=%s event=%s %s",
       static_cast<long long>(esp_timer_get_time()), levelName(level), event, details);
   if (length < 0 || static_cast<std::size_t>(length) >= sizeof(entry.line) ||
-      xQueueSend(queue_, &entry, 0) != pdTRUE) {
+      xQueueSend(diagnosticQueue_, &entry, 0) != pdTRUE) {
     ++dropped_;
     return false;
   }
   ++queued_;
+  updateHighWater(diagnosticQueueHighWater_, uxQueueMessagesWaiting(diagnosticQueue_));
+  if (task_ != nullptr) xTaskNotifyGive(task_);
   return true;
 }
 
@@ -213,13 +231,13 @@ bool SdDiagnosticLogger::enqueueImuBatch(std::uint64_t originId,
                                          std::int8_t rssiDbm,
                                          const std::uint8_t* payload,
                                          std::size_t payloadSize) noexcept {
-  if (!rmsHealthy_.load() || queue_ == nullptr || originId == 0 || originBootId == 0 ||
+  if (!rmsHealthy_.load() || rmsQueue_ == nullptr || originId == 0 || originBootId == 0 ||
       payload == nullptr || payloadSize == 0 || payloadSize > 176) {
     ++rmsDropped_;
     return false;
   }
-  LogEntry entry{};
-  entry.kind = EntryKind::ImuBatch;
+  RmsEntry entry{};
+  entry.kind = RmsEntryKind::ImuBatch;
   entry.imu.originId = originId;
   entry.imu.originBootId = originBootId;
   entry.imu.batchSeq = batchSeq;
@@ -228,11 +246,13 @@ bool SdDiagnosticLogger::enqueueImuBatch(std::uint64_t originId,
   entry.imu.rssiDbm = rssiDbm;
   entry.imu.payloadSize = static_cast<std::uint8_t>(payloadSize);
   std::memcpy(entry.imu.payload, payload, payloadSize);
-  if (xQueueSend(queue_, &entry, 0) != pdTRUE) {
+  if (xQueueSend(rmsQueue_, &entry, 0) != pdTRUE) {
     ++rmsDropped_;
     return false;
   }
   ++rmsQueued_;
+  updateHighWater(rmsQueueHighWater_, uxQueueMessagesWaiting(rmsQueue_));
+  if (task_ != nullptr) xTaskNotifyGive(task_);
   return true;
 }
 
@@ -240,28 +260,31 @@ bool SdDiagnosticLogger::enqueueSourceManifest(std::uint64_t originId,
                                                std::uint32_t originBootId,
                                                const std::uint8_t* payload,
                                                std::size_t payloadSize) noexcept {
-  if (!rmsHealthy_.load() || queue_ == nullptr || originId == 0 || originBootId == 0 ||
+  if (!rmsHealthy_.load() || rmsQueue_ == nullptr || originId == 0 || originBootId == 0 ||
       payload == nullptr || payloadSize != 34) {
     ++rmsDropped_;
     return false;
   }
-  LogEntry entry{};
-  entry.kind = EntryKind::SourceManifest;
+  RmsEntry entry{};
+  entry.kind = RmsEntryKind::SourceManifest;
   entry.manifest.originId = originId;
   entry.manifest.originBootId = originBootId;
   std::memcpy(entry.manifest.payload, payload, payloadSize);
-  if (xQueueSend(queue_, &entry, 0) != pdTRUE) {
+  if (xQueueSend(rmsQueue_, &entry, 0) != pdTRUE) {
     ++rmsDropped_;
     return false;
   }
   ++rmsQueued_;
+  updateHighWater(rmsQueueHighWater_, uxQueueMessagesWaiting(rmsQueue_));
+  if (task_ != nullptr) xTaskNotifyGive(task_);
   return true;
 }
 
 SdDiagnosticLoggerStats SdDiagnosticLogger::stats() const noexcept {
   return {queued_.load(), dropped_.load(), writeFailures_.load(), rotations_.load(),
           rmsQueued_.load(), rmsWritten_.load(), rmsDropped_.load(),
-          rmsWriteFailures_.load(), rmsCheckpoints_.load(), rmsBytes_.load()};
+          rmsWriteFailures_.load(), rmsCheckpoints_.load(), rmsBytes_.load(),
+          diagnosticQueueHighWater_.load(), rmsQueueHighWater_.load()};
 }
 
 void SdDiagnosticLogger::taskEntry(void* context) noexcept {
@@ -269,22 +292,17 @@ void SdDiagnosticLogger::taskEntry(void* context) noexcept {
 }
 
 void SdDiagnosticLogger::run() noexcept {
-  LogEntry entry{};
+  DiagnosticEntry diagnostic{};
+  RmsEntry entry{};
+  bool diagnosticDirty = false;
+  std::int64_t diagnosticLastSyncUs = esp_timer_get_time();
   for (;;) {
-    if (xQueueReceive(queue_, &entry, portMAX_DELAY) == pdTRUE) {
-      if (entry.kind == EntryKind::Diagnostic) {
-        Status writeStatus = Status::failure(Error::Busy);
-        if (filesystemMutex_ != nullptr &&
-            xSemaphoreTake(filesystemMutex_, portMAX_DELAY) == pdTRUE) {
-          writeStatus = log_.appendLine(entry.line);
-          xSemaphoreGive(filesystemMutex_);
-        }
-        if (!writeStatus.ok()) ++writeFailures_;
-        rotations_.store(log_.stats().rotations);
-        continue;
-      }
+    bool processedRms = false;
+    for (std::size_t burst = 0; burst < kRmsBurstLimit; ++burst) {
+      if (xQueueReceive(rmsQueue_, &entry, 0) != pdTRUE) break;
+      processedRms = true;
       std::uint8_t payload[storage::kRms1MaximumPayloadBytes]{};
-      if (entry.kind == EntryKind::SourceManifest) {
+      if (entry.kind == RmsEntryKind::SourceManifest) {
         std::memcpy(payload, entry.manifest.payload, 34);
         storage::Rms1Record record{storage::Rms1RecordType::SourceManifest,
                                    ++rmsOrdinal_,
@@ -334,8 +352,23 @@ void SdDiagnosticLogger::run() noexcept {
       ++rmsWritten_;
       rmsBytes_.fetch_add(encodedSize);
       rmsBytesSinceSync_ += encodedSize;
-      const std::int64_t now = esp_timer_get_time();
-      if (rmsBytesSinceSync_ >= 32U * 1024U || now - rmsLastSyncUs_ >= 1000000) {
+    }
+
+    if (xQueueReceive(diagnosticQueue_, &diagnostic, 0) == pdTRUE) {
+        Status writeStatus = Status::failure(Error::Busy);
+        if (filesystemMutex_ != nullptr &&
+            xSemaphoreTake(filesystemMutex_, portMAX_DELAY) == pdTRUE) {
+          writeStatus = log_.appendLine(diagnostic.line);
+          xSemaphoreGive(filesystemMutex_);
+        }
+        if (!writeStatus.ok()) ++writeFailures_;
+        else diagnosticDirty = true;
+        rotations_.store(log_.stats().rotations);
+    }
+
+    const std::int64_t now = esp_timer_get_time();
+    if (rmsHealthy_.load() && rmsFile_ != nullptr && rmsBytesSinceSync_ > 0 &&
+        (rmsBytesSinceSync_ >= 32U * 1024U || now - rmsLastSyncUs_ >= kSyncIntervalUs)) {
         if (std::fflush(rmsFile_) != 0 || fsync(fileno(rmsFile_)) != 0) {
           ++rmsWriteFailures_;
           rmsHealthy_.store(false);
@@ -344,7 +377,22 @@ void SdDiagnosticLogger::run() noexcept {
         }
         rmsBytesSinceSync_ = 0;
         rmsLastSyncUs_ = now;
+    }
+    if (diagnosticDirty && now - diagnosticLastSyncUs >= kSyncIntervalUs) {
+      Status syncStatus = Status::failure(Error::Busy);
+      if (filesystemMutex_ != nullptr &&
+          xSemaphoreTake(filesystemMutex_, portMAX_DELAY) == pdTRUE) {
+        syncStatus = log_.sync();
+        xSemaphoreGive(filesystemMutex_);
       }
+      if (!syncStatus.ok()) ++writeFailures_;
+      else diagnosticDirty = false;
+      diagnosticLastSyncUs = now;
+    }
+
+    if (!processedRms && uxQueueMessagesWaiting(diagnosticQueue_) == 0 &&
+        uxQueueMessagesWaiting(rmsQueue_) == 0) {
+      ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
     }
   }
 }

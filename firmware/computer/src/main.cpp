@@ -148,7 +148,7 @@ extern "C" void app_main(void) {
                   "sd_log_rotations=%lu imu_attempts=%llu imu_valid=%llu imu_errors=%llu "
                   "imu_missed=%llu imu_max_jitter_us=%llu local_batches=%llu "
                   "rms_queued=%lu rms_written=%lu rms_dropped=%lu rms_write_failures=%lu "
-                  "rms_checkpoints=%lu rms_bytes=%llu",
+                  "rms_checkpoints=%lu rms_bytes=%llu sd_log_queue_hwm=%lu rms_queue_hwm=%lu",
                   static_cast<unsigned long long>(esp_timer_get_time() / 1000),
                   static_cast<unsigned long>(health.runtimeStarts),
                   static_cast<unsigned long>(health.queueOverflows),
@@ -171,7 +171,9 @@ extern "C" void app_main(void) {
                   static_cast<unsigned long>(sdLogStats.rmsDropped),
                   static_cast<unsigned long>(sdLogStats.rmsWriteFailures),
                   static_cast<unsigned long>(sdLogStats.rmsCheckpoints),
-                  static_cast<unsigned long long>(sdLogStats.rmsBytes));
+                  static_cast<unsigned long long>(sdLogStats.rmsBytes),
+                  static_cast<unsigned long>(sdLogStats.diagnosticQueueHighWater),
+                  static_cast<unsigned long>(sdLogStats.rmsQueueHighWater));
     ESP_LOGI(kLogTag, "health %s", healthDetails);
     if (sdLogger.isReady() &&
         !sdLogger.enqueue(remus::computer::DiagnosticLogLevel::Info, "health", healthDetails)) {

@@ -82,7 +82,7 @@ Status RotatingTextLog::appendLine(const char* line) noexcept {
     return ioFailure();
   }
   stats_.activeBytes += recordBytes;
-  return sync();
+  return config_.syncEveryAppend ? sync() : Status::success();
 }
 
 Status RotatingTextLog::close() noexcept {
@@ -132,6 +132,7 @@ Status RotatingTextLog::sync() noexcept {
     ++stats_.syncFailures;
     return ioFailure();
   }
+  ++stats_.syncs;
   return Status::success();
 }
 
