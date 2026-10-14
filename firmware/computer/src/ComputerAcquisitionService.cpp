@@ -21,8 +21,10 @@ Status ComputerAcquisitionService::start(RecordingId recordingId) noexcept {
   task_ = xTaskCreateStatic(taskEntry, "computer_imu", 4096, this, 12, taskStack_, &taskBuffer_);
   if (task_ == nullptr) return Status::failure(Error::NotReady);
   ESP_LOGW(kTag,
-           "ready source=computer_local_imu rate_hz=200 mode=software_timer "
-           "drdy_gpio=unassigned fifo_supported=true");
+           "ready source=computer_local_imu rate_hz=200 address=0x%02x identity=0x%02x "
+           "mode=software_timer drdy_gpio=unassigned fifo_supported=true",
+           static_cast<unsigned>(imu_.detectedAddress()),
+           static_cast<unsigned>(imu_.detectedIdentity()));
   return Status::success();
 }
 

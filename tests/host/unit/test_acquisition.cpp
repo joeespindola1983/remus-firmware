@@ -5,6 +5,7 @@
 #include "remus/acquisition/AcquisitionPipeline.hpp"
 #include "remus/acquisition/BatchBuilder.hpp"
 #include "remus/acquisition/Sampler.hpp"
+#include "remus/platform/esp32/Mpu6050Compatibility.hpp"
 
 namespace {
 int failures = 0;
@@ -104,6 +105,16 @@ void testSharedPipelinePublishesTenSamplesToRoleSpecificSink() {
   EXPECT(sink.batch.firstSampleIndex == 0);
   EXPECT(pipeline.metrics().missedPeriods == 0);
 }
+
+void testMpuCompatibilityUsesFunctionalConfigurationNotIdentityAlone() {
+  using remus::platform::esp32::hasMpu6050RegisterProfile;
+  using remus::platform::esp32::isCanonicalMpu6050Identity;
+  EXPECT(isCanonicalMpu6050Identity(0x68));
+  EXPECT(isCanonicalMpu6050Identity(0x69));
+  EXPECT(!isCanonicalMpu6050Identity(0x74));
+  EXPECT(hasMpu6050RegisterProfile(0x00, 0x03, 0x04, 0x10, 0x08, 0x04));
+  EXPECT(!hasMpu6050RegisterProfile(0x40, 0x03, 0x04, 0x10, 0x08, 0x04));
+}
 }  // namespace
 
 int main() {
@@ -111,5 +122,6 @@ int main() {
   testReadFailureConsumesIndexWithoutFabricatingSample();
   testBatchBuilderClosesTenSamplesAndNeverHidesGap();
   testSharedPipelinePublishesTenSamplesToRoleSpecificSink();
+  testMpuCompatibilityUsesFunctionalConfigurationNotIdentityAlone();
   return failures == 0 ? 0 : 1;
 }

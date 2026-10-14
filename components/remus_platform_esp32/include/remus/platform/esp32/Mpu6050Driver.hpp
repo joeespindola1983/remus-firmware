@@ -40,6 +40,8 @@ class Mpu6050Driver final : public hal::IImu {
   Status health() noexcept override;
   bool waitForDataReady(TickType_t timeoutTicks) noexcept;
   Mpu6050Stats stats() const noexcept;
+  std::uint8_t detectedAddress() const noexcept { return detectedAddress_; }
+  std::uint8_t detectedIdentity() const noexcept { return detectedIdentity_; }
 
  private:
   static void IRAM_ATTR dataReadyIsr(void* context) noexcept;
@@ -56,6 +58,9 @@ class Mpu6050Driver final : public hal::IImu {
   Mpu6050Stats stats_{};
   bool initialized_{false};
   bool fifoEnabled_{false};
+  std::uint8_t detectedAddress_{0};
+  std::uint8_t detectedIdentity_{0};
+  std::uint8_t configuredDivider_{0};
 };
 
 }  // namespace remus::platform::esp32

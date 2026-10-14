@@ -22,8 +22,10 @@ Status BladeAcquisitionService::start() noexcept {
   task_ = xTaskCreateStatic(taskEntry, "blade_imu", 4096, this, 12, taskStack_, &taskBuffer_);
   if (task_ == nullptr) return Status::failure(Error::NotReady);
   ESP_LOGW(kTag,
-           "ready rate_hz=200 sda=6 scl=5 mode=software_timer "
-           "drdy_gpio=unassigned fifo_supported=true");
+           "ready rate_hz=200 sda=6 scl=5 address=0x%02x identity=0x%02x "
+           "mode=software_timer drdy_gpio=unassigned fifo_supported=true",
+           static_cast<unsigned>(imu_.detectedAddress()),
+           static_cast<unsigned>(imu_.detectedIdentity()));
   return Status::success();
 }
 

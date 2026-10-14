@@ -4,6 +4,7 @@
 
 #include "esp_err.h"
 #include "esp_rom_sys.h"
+#include "remus/platform/esp32/Mpu6050Compatibility.hpp"
 
 namespace remus::platform::esp32 {
 namespace {
@@ -21,7 +22,6 @@ constexpr std::uint8_t kUserControl = 0x6A;
 constexpr std::uint8_t kPowerManagement = 0x6B;
 constexpr std::uint8_t kFifoCount = 0x72;
 constexpr std::uint8_t kFifoData = 0x74;
-constexpr std::uint8_t kExpectedWhoAmI = 0x68;
 constexpr std::size_t kFifoSampleBytes = 12;
 constexpr std::size_t kFifoCapacityBytes = 1024;
 constexpr int kTransferTimeoutMs = 20;
@@ -72,28 +72,57 @@ Status Mpu6050Driver::initialize(std::uint16_t samplingRateHertz) noexcept {
   auto error = i2c_new_master_bus(&busConfig, &bus_);
   if (error != ESP_OK) return Status::failure(Error::IoFailure, error);
 
+  // Match the proven remus-sensor bring-up: allow the powered module and bus
+  // to settle, then probe both legal AD0 selections before configuring it.
+  esp_rom_delay_us(30000);
+
+  const std::uint8_t alternateAddress = config_.address == 0x68 ? 0x69 : 0x68;
+  std::uint8_t selectedAddress = config_.address;
+  error = i2c_master_probe(bus_, selectedAddress, kTransferTimeoutMs);
+  if (error != ESP_OK) {
+    selectedAddress = alternateAddress;
+    error = i2c_master_probe(bus_, selectedAddress, kTransferTimeoutMs);
+  }
+  if (error != ESP_OK) return Status::failure(Error::NotReady, error);
+
   i2c_device_config_t deviceConfig{};
   deviceConfig.dev_addr_length = I2C_ADDR_BIT_LEN_7;
-  deviceConfig.device_address = config_.address;
+  deviceConfig.device_address = selectedAddress;
   deviceConfig.scl_speed_hz = config_.busSpeedHz;
   error = i2c_master_bus_add_device(bus_, &deviceConfig, &device_);
   if (error != ESP_OK) return Status::failure(Error::IoFailure, error);
 
-  std::uint8_t identity = 0;
-  Status status = readRegisters(kWhoAmI, &identity, 1);
-  if (!status.ok() || (identity & 0x7E) != kExpectedWhoAmI)
-    return Status::failure(Error::NotReady, identity);
-  if (!(status = writeRegister(kPowerManagement, 0x80)).ok()) return status;
-  esp_rom_delay_us(100000);
-  if (!(status = writeRegister(kPowerManagement, 0x01)).ok() ||
+  Status status = writeRegister(kPowerManagement, 0x00);
+  if (!status.ok()) return status;
+  esp_rom_delay_us(10000);
+  const auto divider = static_cast<std::uint8_t>(1000U / samplingRateHertz - 1U);
+  if (
       !(status = writeRegister(kConfig, 0x03)).ok() ||
-      !(status = writeRegister(kSampleRateDivider,
-                               static_cast<std::uint8_t>(1000U / samplingRateHertz - 1U)))
-           .ok() ||
+      !(status = writeRegister(kSampleRateDivider, divider)).ok() ||
       !(status = writeRegister(kAccelConfig, 0x10)).ok() ||
       !(status = writeRegister(kGyroConfig, 0x08)).ok()) {
     return status;
   }
+
+  std::uint8_t identity = 0;
+  std::uint8_t power = 0;
+  std::uint8_t dlpf = 0;
+  std::uint8_t configuredDivider = 0;
+  std::uint8_t accel = 0;
+  std::uint8_t gyro = 0;
+  if (!(status = readRegisters(kWhoAmI, &identity, 1)).ok() ||
+      !(status = readRegisters(kPowerManagement, &power, 1)).ok() ||
+      !(status = readRegisters(kConfig, &dlpf, 1)).ok() ||
+      !(status = readRegisters(kSampleRateDivider, &configuredDivider, 1)).ok() ||
+      !(status = readRegisters(kAccelConfig, &accel, 1)).ok() ||
+      !(status = readRegisters(kGyroConfig, &gyro, 1)).ok()) {
+    return status;
+  }
+  if (!hasMpu6050RegisterProfile(power, dlpf, configuredDivider, accel, gyro, divider))
+    return Status::failure(Error::NotReady, identity);
+  detectedAddress_ = selectedAddress;
+  detectedIdentity_ = identity;
+  configuredDivider_ = divider;
 
   if (config_.dataReady != GPIO_NUM_NC) {
     gpio_config_t gpioConfig{};
@@ -181,11 +210,21 @@ Status Mpu6050Driver::readFifo(hal::ImuRaw* destination, std::size_t maxSamples,
 
 Status Mpu6050Driver::health() noexcept {
   if (!initialized_) return Status::failure(Error::NotReady);
-  std::uint8_t identity = 0;
-  const auto status = readRegisters(kWhoAmI, &identity, 1);
-  if (!status.ok()) return status;
-  return (identity & 0x7E) == kExpectedWhoAmI ? Status::success()
-                                              : Status::failure(Error::IoFailure, identity);
+  std::uint8_t power = 0;
+  std::uint8_t dlpf = 0;
+  std::uint8_t divider = 0;
+  std::uint8_t accel = 0;
+  std::uint8_t gyro = 0;
+  Status status{};
+  if (!(status = readRegisters(kPowerManagement, &power, 1)).ok() ||
+      !(status = readRegisters(kConfig, &dlpf, 1)).ok() ||
+      !(status = readRegisters(kSampleRateDivider, &divider, 1)).ok() ||
+      !(status = readRegisters(kAccelConfig, &accel, 1)).ok() ||
+      !(status = readRegisters(kGyroConfig, &gyro, 1)).ok())
+    return status;
+  return hasMpu6050RegisterProfile(power, dlpf, divider, accel, gyro, configuredDivider_)
+             ? Status::success()
+             : Status::failure(Error::IoFailure, detectedIdentity_);
 }
 
 void IRAM_ATTR Mpu6050Driver::dataReadyIsr(void* context) noexcept {

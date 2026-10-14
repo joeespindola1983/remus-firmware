@@ -105,7 +105,10 @@ target_link_libraries(remus_acquisition PUBLIC remus_hal)
 target_compile_options(remus_acquisition PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 add_executable(test_acquisition unit/test_acquisition.cpp)
-target_include_directories(test_acquisition PRIVATE fakes)
+target_include_directories(test_acquisition PRIVATE
+  fakes
+  "${REPO_ROOT}/components/remus_platform_esp32/include"
+)
 target_link_libraries(test_acquisition PRIVATE remus_acquisition remus_hal)
 target_compile_options(test_acquisition PRIVATE -Wall -Wextra -Wpedantic -Werror)
 add_test(NAME acquisition COMMAND test_acquisition)
