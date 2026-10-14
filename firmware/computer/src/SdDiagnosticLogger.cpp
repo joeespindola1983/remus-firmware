@@ -13,6 +13,10 @@
 #include "sdmmc_cmd.h"
 #include "remus/storage/Rms1Codec.hpp"
 
+#if !defined(CONFIG_FATFS_LFN_HEAP) && !defined(CONFIG_FATFS_LFN_STACK)
+#error "Remus Computer requires FatFs long filename support for RMS1 and log rotation"
+#endif
+
 namespace remus::computer {
 
 namespace {
