@@ -45,7 +45,11 @@ Status RotatingTextLog::open() noexcept {
     return status;
   }
   stats_.activeBytes = static_cast<std::uint64_t>(position);
-  if (stats_.activeBytes >= config_.segmentBytes) {
+  // Reserve enough room for the largest accepted line before asynchronous
+  // writers start. This keeps a nearly-full file from forcing its first
+  // rotation in the writer task while another startup operation opens a
+  // second file on the same FAT volume.
+  if (stats_.activeBytes + config_.maximumLineBytes + 1 > config_.segmentBytes) {
     return rotate();
   }
   return Status::success();
@@ -78,7 +82,7 @@ Status RotatingTextLog::appendLine(const char* line) noexcept {
     return ioFailure();
   }
   stats_.activeBytes += recordBytes;
-  return sync();
+  return config_.syncEveryAppend ? sync() : Status::success();
 }
 
 Status RotatingTextLog::close() noexcept {
@@ -128,6 +132,7 @@ Status RotatingTextLog::sync() noexcept {
     ++stats_.syncFailures;
     return ioFailure();
   }
+  ++stats_.syncs;
   return Status::success();
 }
 

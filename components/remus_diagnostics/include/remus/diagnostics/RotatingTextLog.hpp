@@ -13,6 +13,7 @@ struct RotatingTextLogConfig {
   const char* archivePath{nullptr};
   std::size_t segmentBytes{0};
   std::size_t maximumLineBytes{0};
+  bool syncEveryAppend{true};
 };
 
 struct RotatingTextLogStats {
@@ -20,6 +21,7 @@ struct RotatingTextLogStats {
   std::uint32_t rotations{0};
   std::uint32_t appendFailures{0};
   std::uint32_t syncFailures{0};
+  std::uint32_t syncs{0};
 };
 
 class RotatingTextLog {
@@ -32,14 +34,13 @@ class RotatingTextLog {
 
   Status open() noexcept;
   Status appendLine(const char* line) noexcept;
+  Status sync() noexcept;
   Status close() noexcept;
   bool isOpen() const noexcept { return file_ != nullptr; }
   RotatingTextLogStats stats() const noexcept { return stats_; }
 
  private:
   Status rotate() noexcept;
-  Status sync() noexcept;
-
   RotatingTextLogConfig config_;
   std::FILE* file_{nullptr};
   RotatingTextLogStats stats_{};
