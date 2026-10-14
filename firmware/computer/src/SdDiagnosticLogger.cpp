@@ -1,6 +1,8 @@
 #include "SdDiagnosticLogger.hpp"
 
 #include <cstdio>
+#include <cstring>
+#include <unistd.h>
 
 #include "driver/sdspi_host.h"
 #include "driver/spi_common.h"
@@ -8,6 +10,7 @@
 #include "esp_timer.h"
 #include "esp_vfs_fat.h"
 #include "sdmmc_cmd.h"
+#include "remus/storage/Rms1Codec.hpp"
 
 namespace remus::computer {
 
@@ -32,6 +35,17 @@ const char* levelName(DiagnosticLogLevel level) noexcept {
   return "UNKNOWN";
 }
 
+}  // namespace
+
+namespace {
+void put16(std::uint8_t* p, std::uint16_t value) noexcept {
+  p[0] = static_cast<std::uint8_t>(value);
+  p[1] = static_cast<std::uint8_t>(value >> 8);
+}
+void put64(std::uint8_t* p, std::uint64_t value) noexcept {
+  for (unsigned index = 0; index < 8; ++index)
+    p[index] = static_cast<std::uint8_t>(value >> (index * 8));
+}
 }  // namespace
 
 Status SdDiagnosticLogger::start() noexcept {
@@ -112,6 +126,7 @@ bool SdDiagnosticLogger::enqueue(DiagnosticLogLevel level, const char* event,
   }
 
   LogEntry entry{};
+  entry.kind = EntryKind::Diagnostic;
   const int length = std::snprintf(
       entry.line, sizeof(entry.line), "mono_us=%lld level=%s event=%s %s",
       static_cast<long long>(esp_timer_get_time()), levelName(level), event, details);
@@ -124,8 +139,77 @@ bool SdDiagnosticLogger::enqueue(DiagnosticLogLevel level, const char* event,
   return true;
 }
 
+Status SdDiagnosticLogger::startRecording(std::uint64_t recordingId,
+                                          std::uint64_t computerId,
+                                          std::uint32_t pcBootId,
+                                          std::uint32_t networkId,
+                                          std::uint32_t firmwareHash,
+                                          std::uint32_t profileHash) noexcept {
+  if (!ready_ || rmsFile_ != nullptr || recordingId == 0 || computerId == 0 || pcBootId == 0)
+    return Status::failure(Error::InvalidArgument);
+  char path[64]{};
+  std::snprintf(path, sizeof(path), "/sdcard/RM_%016llX.rms",
+                static_cast<unsigned long long>(recordingId));
+  rmsFile_ = std::fopen(path, "wb");
+  if (rmsFile_ == nullptr) return Status::failure(Error::StorageUnavailable);
+  storage::Rms1SessionHeader header{recordingId,
+                                    computerId,
+                                    pcBootId,
+                                    static_cast<std::uint64_t>(esp_timer_get_time()),
+                                    firmwareHash,
+                                    profileHash,
+                                    0,
+                                    networkId,
+                                    0};
+  std::uint8_t encoded[storage::kRms1SessionHeaderBytes]{};
+  Status status = storage::encodeSessionHeader(header, encoded, sizeof(encoded));
+  if (!status.ok() || std::fwrite(encoded, 1, sizeof(encoded), rmsFile_) != sizeof(encoded) ||
+      std::fflush(rmsFile_) != 0 || fsync(fileno(rmsFile_)) != 0) {
+    std::fclose(rmsFile_);
+    rmsFile_ = nullptr;
+    return Status::failure(Error::IoFailure);
+  }
+  rmsBytes_.store(sizeof(encoded));
+  rmsLastSyncUs_ = esp_timer_get_time();
+  rmsHealthy_.store(true);
+  return Status::success();
+}
+
+bool SdDiagnosticLogger::enqueueImuBatch(std::uint64_t originId,
+                                         std::uint32_t originBootId,
+                                         std::uint32_t batchSeq,
+                                         std::uint64_t originMonoUs,
+                                         std::uint64_t ingestPcMonoUs,
+                                         std::int8_t rssiDbm,
+                                         const std::uint8_t* payload,
+                                         std::size_t payloadSize) noexcept {
+  if (!rmsHealthy_.load() || queue_ == nullptr || originId == 0 || originBootId == 0 ||
+      payload == nullptr || payloadSize == 0 || payloadSize > 176) {
+    ++rmsDropped_;
+    return false;
+  }
+  LogEntry entry{};
+  entry.kind = EntryKind::ImuBatch;
+  entry.imu.originId = originId;
+  entry.imu.originBootId = originBootId;
+  entry.imu.batchSeq = batchSeq;
+  entry.imu.originMonoUs = originMonoUs;
+  entry.imu.ingestPcMonoUs = ingestPcMonoUs;
+  entry.imu.rssiDbm = rssiDbm;
+  entry.imu.payloadSize = static_cast<std::uint8_t>(payloadSize);
+  std::memcpy(entry.imu.payload, payload, payloadSize);
+  if (xQueueSend(queue_, &entry, 0) != pdTRUE) {
+    ++rmsDropped_;
+    return false;
+  }
+  ++rmsQueued_;
+  return true;
+}
+
 SdDiagnosticLoggerStats SdDiagnosticLogger::stats() const noexcept {
-  return {queued_.load(), dropped_.load(), writeFailures_.load(), rotations_.load()};
+  return {queued_.load(), dropped_.load(), writeFailures_.load(), rotations_.load(),
+          rmsQueued_.load(), rmsWritten_.load(), rmsDropped_.load(),
+          rmsWriteFailures_.load(), rmsCheckpoints_.load(), rmsBytes_.load()};
 }
 
 void SdDiagnosticLogger::taskEntry(void* context) noexcept {
@@ -136,10 +220,49 @@ void SdDiagnosticLogger::run() noexcept {
   LogEntry entry{};
   for (;;) {
     if (xQueueReceive(queue_, &entry, portMAX_DELAY) == pdTRUE) {
-      if (!log_.appendLine(entry.line).ok()) {
-        ++writeFailures_;
+      if (entry.kind == EntryKind::Diagnostic) {
+        if (!log_.appendLine(entry.line).ok()) ++writeFailures_;
+        rotations_.store(log_.stats().rotations);
+        continue;
       }
-      rotations_.store(log_.stats().rotations);
+      std::uint8_t payload[storage::kRms1MaximumPayloadBytes]{};
+      put64(payload, entry.imu.originMonoUs);
+      put64(payload + 8, entry.imu.ingestPcMonoUs);
+      payload[16] = static_cast<std::uint8_t>(entry.imu.rssiDbm);
+      payload[17] = 0;
+      put16(payload + 18, 0);
+      std::memcpy(payload + 20, entry.imu.payload, entry.imu.payloadSize);
+      storage::Rms1Record record{storage::Rms1RecordType::ImuBatch,
+                                 ++rmsOrdinal_,
+                                 static_cast<std::uint64_t>(esp_timer_get_time()),
+                                 entry.imu.originId,
+                                 entry.imu.originBootId,
+                                 entry.imu.batchSeq,
+                                 payload,
+                                 static_cast<std::uint32_t>(20 + entry.imu.payloadSize)};
+      std::uint8_t encoded[storage::kRms1MaximumRecordBytes]{};
+      std::size_t encodedSize = 0;
+      if (!rmsHealthy_.load() || rmsFile_ == nullptr ||
+          !storage::encodeRecord(record, encoded, sizeof(encoded), encodedSize).ok() ||
+          std::fwrite(encoded, 1, encodedSize, rmsFile_) != encodedSize) {
+        ++rmsWriteFailures_;
+        rmsHealthy_.store(false);
+        continue;
+      }
+      ++rmsWritten_;
+      rmsBytes_.fetch_add(encodedSize);
+      rmsBytesSinceSync_ += encodedSize;
+      const std::int64_t now = esp_timer_get_time();
+      if (rmsBytesSinceSync_ >= 32U * 1024U || now - rmsLastSyncUs_ >= 1000000) {
+        if (std::fflush(rmsFile_) != 0 || fsync(fileno(rmsFile_)) != 0) {
+          ++rmsWriteFailures_;
+          rmsHealthy_.store(false);
+        } else {
+          ++rmsCheckpoints_;
+        }
+        rmsBytesSinceSync_ = 0;
+        rmsLastSyncUs_ = now;
+      }
     }
   }
 }

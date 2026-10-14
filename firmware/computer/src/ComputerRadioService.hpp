@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 
 #include "SdDiagnosticLogger.hpp"
 #include "freertos/FreeRTOS.h"
@@ -23,12 +24,16 @@ class ComputerRadioService final : public hal::IRadioEvents {
       : diagnosticLog_(diagnosticLog), recordingId_(recordingId) {}
   Status start() noexcept;
   RecordingId recordingId() const noexcept { return recordingId_; }
+  ComputerId computerId() const noexcept { return computerId_; }
+  DeviceBootId bootId() const noexcept { return bootId_; }
+  NetworkId networkId() const noexcept { return networkId_; }
+  void setCaptureAllowed(bool allowed) noexcept;
   void onRadioReceived(const hal::RadioRxMeta&, const std::uint8_t*, std::size_t) noexcept override;
   void onRadioSendComplete(const MacAddress&, bool) noexcept override;
   std::size_t sourceCount() const noexcept { return registry_.size(); }
 
  private:
-  enum class EventKind : std::uint8_t { Receive, SendComplete };
+  enum class EventKind : std::uint8_t { Receive, SendComplete, CaptureEnabled };
   struct Event {
     EventKind kind{};
     hal::RadioRxMeta meta{};
@@ -82,5 +87,6 @@ class ComputerRadioService final : public hal::IRadioEvents {
   StaticTask_t taskBuffer_{};
   StackType_t taskStack_[5120]{};
   TaskHandle_t task_{nullptr};
+  std::atomic<bool> captureAllowed_{false};
 };
 }  // namespace remus::computer

@@ -7,6 +7,7 @@
 #include "remus/platform/esp32/Mpu6050Driver.hpp"
 
 namespace remus::computer {
+class SdDiagnosticLogger;
 
 class ComputerAcquisitionService final : public acquisition::IAcquisitionSink {
  public:
@@ -20,6 +21,12 @@ class ComputerAcquisitionService final : public acquisition::IAcquisitionSink {
   acquisition::SamplingMetrics metrics() const noexcept { return pipeline_.metrics(); }
   std::uint8_t detectedAddress() const noexcept { return imu_.detectedAddress(); }
   std::uint8_t detectedIdentity() const noexcept { return imu_.detectedIdentity(); }
+  void setStorageContext(SdDiagnosticLogger* storage, ComputerId computerId,
+                         DeviceBootId bootId) noexcept {
+    storage_ = storage;
+    computerId_ = computerId;
+    bootId_ = bootId;
+  }
 
  private:
   class EspTimerClock final : public IClock {
@@ -37,6 +44,9 @@ class ComputerAcquisitionService final : public acquisition::IAcquisitionSink {
   StaticTask_t taskBuffer_{};
   StackType_t taskStack_[4096]{};
   TaskHandle_t task_{nullptr};
+  SdDiagnosticLogger* storage_{nullptr};
+  ComputerId computerId_{0};
+  DeviceBootId bootId_{0};
 };
 
 }  // namespace remus::computer

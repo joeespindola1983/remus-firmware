@@ -3,11 +3,12 @@
 Greenfield firmware for the Remus Computer and Remus Blade, built with C++17,
 ESP-IDF, and PlatformIO.
 
-This repository currently implements **M0, M1, and the software portion of
-M2**: build foundations, bounded diagnostics, the authenticated RemusRF codec,
-ESP-NOW adapters, association state machines, and Computer/Blade radio services.
-It intentionally contains no sensor acquisition, GPS, recording writer, replay,
-or OTA implementation.
+This repository currently implements the M0-M3 acquisition path and an early,
+GPS-free slice of the M5 RMS1 writer: build foundations, bounded diagnostics,
+authenticated ESP-NOW association, 200 Hz raw IMU acquisition on Computer and
+Blade, DATA_BATCH transport, and append-only recording on the Computer SD card.
+Replay/ACK checkpointing, GPS, clean session finalization, and OTA are not yet
+implemented.
 
 M2 broadcasts authenticated `BEACON`/`HELLO`, derives per-pair keys, registers
 encrypted peers, and considers a Blade bound only after its authenticated
@@ -38,7 +39,24 @@ When a FAT-formatted microSD card is present in the Computer, operational events
 are also written to `remus_pc.log`. At 512 KiB it rotates to `remus_pc.log.1`;
 the next rotation replaces the archive, bounding both files to 1 MiB total.
 Card absence or write failure does not stop the Computer. This engineering log
-is deliberately separate from future session evidence and RMS1 storage.
+is deliberately separate from session evidence. While a session is active, raw
+local and remote IMU batches are stored in a uniquely named
+`RM_<recordingId>.rms` file. The writer checkpoints with `fsync` at least once
+per second or each 32 KiB and stops accepting evidence after an SD write or
+checkpoint failure.
+
+After safely ejecting the card, validate an RMS1 file and optionally export all
+raw IMU samples to CSV:
+
+```sh
+python3 tools/remus-inspect/remus_inspect.py /Volumes/REMUS/RM_*.rms
+python3 tools/remus-inspect/remus_inspect.py /Volumes/REMUS/RM_*.rms --csv imu.csv
+```
+
+The inspector verifies session and record CRC32C values, record ordinals, and
+DATA_BATCH sizes. It reports every source independently and infers discontinuity
+counts from batch and sample indices. Raw axes remain raw evidence; conversion
+metadata via `SOURCE_MANIFEST` is part of the remaining M5 work.
 
 Before the first M2 bench test, provision each board's NVS using
 [`tools/provision_nvs.sh`](tools/provision_nvs.sh) and follow

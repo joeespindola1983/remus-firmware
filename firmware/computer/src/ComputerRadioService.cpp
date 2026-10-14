@@ -59,6 +59,14 @@ Status ComputerRadioService::start() noexcept {
 bool ComputerRadioService::enqueue(const Event& event) noexcept {
   return queue_ && xQueueSend(queue_, &event, 0) == pdTRUE;
 }
+void ComputerRadioService::setCaptureAllowed(bool allowed) noexcept {
+  const bool wasAllowed = captureAllowed_.exchange(allowed);
+  if (allowed && !wasAllowed) {
+    Event event{};
+    event.kind = EventKind::CaptureEnabled;
+    enqueue(event);
+  }
+}
 void ComputerRadioService::onRadioReceived(const hal::RadioRxMeta& meta, const std::uint8_t* bytes,
                                            std::size_t size) noexcept {
   if (!bytes || size > link::kMaximumFrameBytes) return;
@@ -87,11 +95,22 @@ void ComputerRadioService::run() noexcept {
     if (xQueueReceive(queue_, &event, pdMS_TO_TICKS(100)) == pdTRUE) {
       if (event.kind == EventKind::Receive)
         handleReceive(event);
-      else {
+      else if (event.kind == EventKind::SendComplete) {
         tx_.onSendComplete(event.destination, event.delivered);
         supervisor_.observe(event.delivered ? link::RadioHealthEvent::FrameDelivered
                                             : link::RadioHealthEvent::DriverFailure,
                             static_cast<NativeTimestampUs>(esp_timer_get_time()));
+      } else {
+        // A Blade may have completed BIND during the short interval between
+        // radio startup and durable RMS1 creation. Re-send the idempotent BIND
+        // with allowCapture=1 so that such a Blade cannot remain silently idle.
+        for (std::size_t index = 0; index < link::SourceRegistry::capacity(); ++index) {
+          auto* source = registry_.entryAt(index);
+          if (source && source->state.state() == link::ComputerPeerState::Bound) {
+            source->bindAttempts = 0;
+            sendBind(*source);
+          }
+        }
       }
     }
     const std::int64_t now = esp_timer_get_time();
@@ -157,7 +176,8 @@ void ComputerRadioService::handleHello(const Event& event,
 }
 void ComputerRadioService::sendBind(link::SourceEntry& source) noexcept {
   if (source.bindAttempts >= 3) return;
-  link::Bind bind{source.bladeId, source.bladeBootId, bootId_, recordingId_, source.bindEpoch, 1};
+  link::Bind bind{source.bladeId, source.bladeBootId, bootId_, recordingId_, source.bindEpoch,
+                  static_cast<std::uint8_t>(captureAllowed_.load() ? 1 : 0)};
   std::uint8_t payload[link::kBindPayloadBytes]{};
   std::size_t payloadSize = 0;
   if (!link::MessageCodec::encode(bind, payload, sizeof(payload), payloadSize).ok()) return;
@@ -222,6 +242,14 @@ void ComputerRadioService::handleDataBatch(link::SourceEntry& source, const Even
   link::DataBatch batch{};
   if (!link::MessageCodec::decode(clear.payload.data(), clear.payloadSize, batch).ok()) {
     log(DiagnosticLogLevel::Warning, "data_batch_rejected", "reason=payload_invalid");
+    return;
+  }
+  if (diagnosticLog_ == nullptr ||
+      !diagnosticLog_->enqueueImuBatch(source.bladeId, source.bladeBootId, batch.batchSeq,
+                                       clear.header.originMonoUs, event.meta.localRxUs,
+                                       event.meta.rssiDbm, clear.payload.data(),
+                                       clear.payloadSize)) {
+    log(DiagnosticLogLevel::Error, "rms_batch_rejected", "reason=storage_queue_full");
     return;
   }
   DataSinkStats* sink = nullptr;

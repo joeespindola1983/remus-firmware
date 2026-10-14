@@ -118,3 +118,22 @@ target_include_directories(test_data_batch PRIVATE fakes)
 target_link_libraries(test_data_batch PRIVATE remus_link remus_hal)
 target_compile_options(test_data_batch PRIVATE -Wall -Wextra -Wpedantic -Werror)
 add_test(NAME data_batch COMMAND test_data_batch)
+
+add_library(remus_storage STATIC
+  "${REPO_ROOT}/components/remus_storage/src/Rms1Codec.cpp"
+)
+target_include_directories(remus_storage PUBLIC
+  "${REPO_ROOT}/components/remus_storage/include"
+)
+target_link_libraries(remus_storage PUBLIC remus_core)
+target_compile_options(remus_storage PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
+add_executable(test_rms1 unit/test_rms1.cpp)
+target_link_libraries(test_rms1 PRIVATE remus_storage)
+target_compile_options(test_rms1 PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_test(NAME rms1 COMMAND test_rms1)
+
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+add_test(NAME remus_inspect
+  COMMAND "${Python3_EXECUTABLE}" "${REPO_ROOT}/tools/remus-inspect/test_remus_inspect.py"
+)

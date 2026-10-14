@@ -12,6 +12,7 @@ idf_component_register(
     remus_diagnostics
     remus_acquisition
     remus_link
+    remus_storage
     remus_platform_esp32
     fatfs
     sdmmc

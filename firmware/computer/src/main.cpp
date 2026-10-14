@@ -15,6 +15,16 @@
 namespace {
 constexpr char kLogTag[] = "remus_computer";
 constexpr TickType_t kHealthLogInterval = pdMS_TO_TICKS(5000);
+
+std::uint32_t fnv1a(const char* value) noexcept {
+  std::uint32_t hash = 2166136261U;
+  if (value == nullptr) return hash;
+  while (*value != '\0') {
+    hash ^= static_cast<std::uint8_t>(*value++);
+    hash *= 16777619U;
+  }
+  return hash;
+}
 }  // namespace
 
 extern "C" void app_main(void) {
@@ -68,8 +78,8 @@ extern "C" void app_main(void) {
   }
 
   // Wi-Fi/ESP-NOW initialization can occupy the ESP32-C3's single core for
-  // tens of milliseconds. Stabilize it before starting the 200 Hz sampler;
-  // acquisition still starts even when radio initialization fails.
+  // tens of milliseconds. Stabilize it before opening RMS1 and starting the
+  // 200 Hz sampler so startup work cannot create an avoidable sample gap.
   const remus::Status radioStatus = radioService.start();
   if (!radioStatus.ok()) {
     ESP_LOGE(kLogTag, "radio unavailable: error=%u detail=%lu; provision remus NVS credentials",
@@ -82,7 +92,27 @@ extern "C" void app_main(void) {
     ESP_LOGI(kLogTag, "Remus Computer M2 association service ready");
   }
 
-  const remus::Status acquisitionStatus = acquisitionService.start(recordingId);
+  if (sdLogger.isReady() && radioStatus.ok()) {
+    const esp_app_desc_t* app = esp_app_get_description();
+    const remus::Status rmsStatus = sdLogger.startRecording(
+        recordingId, radioService.computerId(), radioService.bootId(), radioService.networkId(),
+        fnv1a(app->version), fnv1a("remus-computer-prototype1"));
+    if (!rmsStatus.ok()) {
+      ESP_LOGE(kLogTag, "RMS1 recording unavailable: error=%u detail=%lu",
+               static_cast<unsigned>(rmsStatus.error),
+               static_cast<unsigned long>(rmsStatus.detail));
+    } else {
+      radioService.setCaptureAllowed(true);
+      acquisitionService.setStorageContext(&sdLogger, radioService.computerId(),
+                                           radioService.bootId());
+      ESP_LOGI(kLogTag, "RMS1 recording started recording_id=%016llx",
+               static_cast<unsigned long long>(recordingId));
+    }
+  }
+
+  const remus::Status acquisitionStatus =
+      sdLogger.isRecording() ? acquisitionService.start(recordingId)
+                             : remus::Status::failure(remus::Error::StorageUnavailable);
   if (!acquisitionStatus.ok()) {
     ESP_LOGE(kLogTag, "local IMU unavailable: error=%u detail=%lu; system remains operational",
              static_cast<unsigned>(acquisitionStatus.error),
@@ -110,13 +140,15 @@ extern "C" void app_main(void) {
     const remus::diagnostics::HealthSnapshot health = runtime.healthSnapshot();
     const remus::acquisition::SamplingMetrics imu = acquisitionService.metrics();
     const remus::computer::SdDiagnosticLoggerStats sdLogStats = sdLogger.stats();
-    char healthDetails[384]{};
+    char healthDetails[512]{};
     std::snprintf(healthDetails, sizeof(healthDetails),
                   "uptime_ms=%llu runtime_starts=%lu queue_overflows=%lu pool_exhaustions=%lu "
                   "invalid_handle_releases=%lu free_heap=%lu minimum_free_heap=%lu "
                   "sd_log_queued=%lu sd_log_dropped=%lu sd_log_write_failures=%lu "
                   "sd_log_rotations=%lu imu_attempts=%llu imu_valid=%llu imu_errors=%llu "
-                  "imu_missed=%llu imu_max_jitter_us=%llu local_batches=%llu",
+                  "imu_missed=%llu imu_max_jitter_us=%llu local_batches=%llu "
+                  "rms_queued=%lu rms_written=%lu rms_dropped=%lu rms_write_failures=%lu "
+                  "rms_checkpoints=%lu rms_bytes=%llu",
                   static_cast<unsigned long long>(esp_timer_get_time() / 1000),
                   static_cast<unsigned long>(health.runtimeStarts),
                   static_cast<unsigned long>(health.queueOverflows),
@@ -133,7 +165,13 @@ extern "C" void app_main(void) {
                   static_cast<unsigned long long>(imu.readErrors),
                   static_cast<unsigned long long>(imu.missedPeriods),
                   static_cast<unsigned long long>(imu.maxAbsJitterUs),
-                  static_cast<unsigned long long>(acquisitionService.batchCount()));
+                  static_cast<unsigned long long>(acquisitionService.batchCount()),
+                  static_cast<unsigned long>(sdLogStats.rmsQueued),
+                  static_cast<unsigned long>(sdLogStats.rmsWritten),
+                  static_cast<unsigned long>(sdLogStats.rmsDropped),
+                  static_cast<unsigned long>(sdLogStats.rmsWriteFailures),
+                  static_cast<unsigned long>(sdLogStats.rmsCheckpoints),
+                  static_cast<unsigned long long>(sdLogStats.rmsBytes));
     ESP_LOGI(kLogTag, "health %s", healthDetails);
     if (sdLogger.isReady() &&
         !sdLogger.enqueue(remus::computer::DiagnosticLogLevel::Info, "health", healthDetails)) {
