@@ -17,6 +17,7 @@ RECORD_HEADER_SIZE = 48
 RECORD_CRC_SIZE = 4
 MAX_RECORD_SIZE = 1024
 IMU_BATCH = 0x03
+GPS_FIX = 0x04
 GAP = 0x05
 SOURCE_MANIFEST = 0x0A
 
@@ -151,11 +152,34 @@ def decode_gap(record: Record):
             "reason": reason}
 
 
+def decode_gps(record: Record):
+    if len(record.payload) != 40:
+        raise RmsError(f"tamanho GPS_FIX invalido no ordinal {record.ordinal}")
+    values = struct.unpack("<QiiIHBBHHqI", record.payload)
+    fix = {"pc_mono_us": values[0], "latitude_e7": values[1],
+           "longitude_e7": values[2], "speed_mm_per_sec": values[3],
+           "course_centi_deg": values[4], "satellites": values[5],
+           "fix_quality": values[6], "hdop_x100": values[7],
+           "flags": values[8], "utc_ms": values[9], "age_ms": values[10]}
+    if fix["pc_mono_us"] == 0 or fix["flags"] & ~0x7F:
+        raise RmsError(f"campos GPS_FIX invalidos no ordinal {record.ordinal}")
+    if fix["flags"] & 0x02 and not (
+        -900000000 <= fix["latitude_e7"] <= 900000000 and
+        -1800000000 <= fix["longitude_e7"] <= 1800000000
+    ):
+        raise RmsError(f"coordenadas GPS_FIX invalidas no ordinal {record.ordinal}")
+    if fix["flags"] & 0x08 and fix["course_centi_deg"] >= 36000:
+        raise RmsError(f"course GPS_FIX invalido no ordinal {record.ordinal}")
+    return fix
+
+
 def inspect(path: Path, csv_path: Path | None) -> None:
     source_stats = defaultdict(lambda: {"batches": 0, "samples": 0, "gaps": 0,
                                         "explicit_gaps": 0, "lost_batches": 0,
                                         "next_batch": None, "next_sample": None})
     record_count = 0
+    gps_stats = {"records": 0, "position_fixes": 0, "ubx_coherent": 0,
+                 "last": None}
     manifests = {}
     writer = None
     output = None
@@ -180,6 +204,13 @@ def inspect(path: Path, csv_path: Path | None) -> None:
                     stats = source_stats[(record.origin_id, record.origin_boot_id)]
                     stats["explicit_gaps"] += 1
                     stats["lost_batches"] += gap["through_batch"] - gap["from_batch"] + 1
+                    continue
+                if record.record_type == GPS_FIX:
+                    fix = decode_gps(record)
+                    gps_stats["records"] += 1
+                    gps_stats["position_fixes"] += bool(fix["flags"] & 0x02)
+                    gps_stats["ubx_coherent"] += bool(fix["flags"] & 0x40)
+                    gps_stats["last"] = fix
                     continue
                 if record.record_type != IMU_BATCH:
                     continue
@@ -226,6 +257,16 @@ def inspect(path: Path, csv_path: Path | None) -> None:
                   f"gyro=+/-{manifest['gyro_fs_dps']}dps dlpf_hz={manifest['dlpf_hz']} "
                   f"rate_hz={manifest['rate_hz']} lsb_per_g={manifest['lsb_per_g']} "
                   f"lsb_per_dps_x10={manifest['lsb_per_dps_x10']}")
+    print(f"gps_records={gps_stats['records']} position_fixes={gps_stats['position_fixes']} "
+          f"ubx_coherent={gps_stats['ubx_coherent']}")
+    if gps_stats["last"] is not None:
+        fix = gps_stats["last"]
+        latitude = fix["latitude_e7"] / 10_000_000 if fix["flags"] & 0x02 else "unavailable"
+        longitude = fix["longitude_e7"] / 10_000_000 if fix["flags"] & 0x02 else "unavailable"
+        print(f"  last_gps latitude={latitude} longitude={longitude} "
+              f"satellites={fix['satellites']} fix_quality={fix['fix_quality']} "
+              f"hdop_x100={fix['hdop_x100']} age_ms={fix['age_ms']} "
+              f"flags=0x{fix['flags']:04X}")
     if csv_path:
         print(f"CSV: {csv_path}")
 

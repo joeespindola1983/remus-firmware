@@ -165,3 +165,29 @@ diagnostics, selective replay, durable RMS1 checkpointing, and Blade
 reassociation after a new boot identity at host-test level. GPS, controlled
 Blade restart evidence, induced recoverable/unrecoverable RF loss, clean
 session finalization, and eight physical encrypted peers remain pending.
+
+## M5 GPS software baseline — 2026-10-14
+
+The isolated `feature/m5-gps` branch adds Computer-only NEO-6M capture without
+changing the Blade target dependency graph. This is software evidence; H4
+remains pending until the receiver, SD card, Computer IMU, and two physical
+Blades are exercised together.
+
+| Item | Observed result |
+|---|---|
+| Host CTest | PASS; 14/14 tests |
+| RMS1 inspector unit tests | PASS; 8/8 tests |
+| UBX evidence | POSLLH/VELNED/STATUS emitted only for equal GPS time-of-week; checksum and mismatched epochs rejected |
+| NMEA evidence | checksum, coordinates, fix quality, satellites, HDOP, speed/course, and UTC date parsing pass |
+| GPS writer isolation | Dedicated 16-entry queue; one GPS write after each IMU burst; GPS overflow cannot occupy the IMU/recovery queue |
+| Blade build | PASS; RAM 119,428 B (36.4%); app image 825,556 B; no GPS component compiled or linked |
+| Computer build | PASS; RAM 121,340 B (37.0%); app image 979,588 B (31.1% of 3 MiB) |
+
+The Computer starts GPS only after RMS recording and local IMU startup. It uses
+UART1 at 9,600 baud with a 2 KiB RX buffer and initially requests 1 Hz. Missing
+UBX acknowledgements do not force a downgrade: coherent navigation epochs and
+CFG-RATE readback are the runtime evidence. Serial output contains only GPS
+readiness/fix/stale/drop state; detailed counters and all GPS_FIX values remain
+on the SD card. Execute
+[`tests/hardware/runbooks/H4_GPS.md`](../tests/hardware/runbooks/H4_GPS.md) before
+promotion or any 5 Hz experiment.

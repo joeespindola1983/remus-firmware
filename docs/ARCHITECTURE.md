@@ -1,4 +1,4 @@
-# Firmware architecture through M4
+# Firmware architecture through the M5 GPS slice
 
 The Remus firmware produces two independent images from one repository:
 
@@ -12,8 +12,8 @@ remus_link -> remus_hal::{ICrypto,IRadio}
 
 M0 establishes the product contracts. `remus_core`, `remus_hal`, and
 `remus_diagnostics` are host-buildable and contain no ESP-IDF or FreeRTOS
-headers. The Computer composition root additionally owns an ESP-IDF microSD
-diagnostic adapter; the Blade has no storage dependency.
+headers. The Computer composition root additionally owns ESP-IDF microSD and
+GPS UART adapters; the Blade has neither storage nor GPS dependencies.
 
 ## Identity and evidence
 
@@ -91,6 +91,21 @@ checkpoint watermark only after successful `fflush` and `fsync`. An
 irrecoverable range is first appended as an RMS1 `GAP` record; therefore a
 radio ACK cannot silently convert missing evidence into durable data.
 
-There is still no GPS, explicit START/STOP session lifecycle, clean session
-finalization, recovery-on-boot, OTA, or time synchronization. `FakeCrypto`
-remains host-test-only.
+## M5 GPS isolation boundary
+
+The Computer alone links `remus_gps` and `remus_platform_esp32_gps`. The NEO-6M
+UART adapter uses a 2 KiB receive buffer. Portable incremental decoders validate
+NMEA and UBX checksums; a UBX navigation epoch is emitted only when POSLLH,
+VELNED, and STATUS share the same receiver time-of-week. NMEA provides UTC,
+satellite/HDOP metadata and a fallback if coherent UBX never becomes available.
+
+GPS runs at priority 5 after the 200 Hz Computer IMU task is active. Its
+dedicated 16-entry writer queue is drained at most once after each RMS IMU
+burst. A full GPS queue drops and counts GPS evidence without occupying the
+96-entry IMU/recovery queue. Detailed receiver counters go to the bounded SD
+diagnostic log; serial output is limited to readiness, fix-state transitions,
+staleness, and newly observed drops.
+
+There is still no explicit START/STOP session lifecycle, clean session
+finalization, recovery-on-boot, OTA, UTC_ANCHOR record, or time synchronization.
+`FakeCrypto` remains host-test-only.

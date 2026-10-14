@@ -3,12 +3,13 @@
 Greenfield firmware for the Remus Computer and Remus Blade, built with C++17,
 ESP-IDF, and PlatformIO.
 
-This repository currently implements the M0-M4 software path and an early,
-GPS-free slice of the M5 RMS1 writer: build foundations, bounded diagnostics,
+This repository currently implements the M0-M4 software path and an early
+M5 RMS1/GPS slice: build foundations, bounded diagnostics,
 authenticated ESP-NOW association, 200 Hz raw IMU acquisition on Computer and
 Blade, selective DATA_BATCH replay, distinct RAM/durable ACK watermarks, and
-append-only recording on the Computer SD card. GPS, explicit START/STOP session
-control, clean finalization, recovery-on-boot, and OTA are not yet implemented.
+append-only recording on the Computer SD card, and independent 1 Hz NEO-6M
+capture on the Computer. Explicit START/STOP session control, clean
+finalization, recovery-on-boot, and OTA are not yet implemented.
 
 M2 broadcasts authenticated `BEACON`/`HELLO`, derives per-pair keys, registers
 encrypted peers, and considers a Blade bound only after its authenticated
@@ -56,8 +57,9 @@ python3 tools/remus-inspect/remus_inspect.py /Volumes/REMUS/RM_*.rms
 python3 tools/remus-inspect/remus_inspect.py /Volumes/REMUS/RM_*.rms --csv imu.csv
 ```
 
-The inspector verifies session and record CRC32C values, record ordinals, and
-DATA_BATCH sizes. It reports every source independently and infers discontinuity
+The inspector verifies session and record CRC32C values, record ordinals,
+DATA_BATCH sizes, and GPS_FIX field bounds. It reports every source independently,
+summarizes GPS fixes, and infers discontinuity
 counts from batch and sample indices. Each source also persists a
 `SOURCE_MANIFEST`; CSV output retains the raw axes and adds calibrated g/dps
 columns derived from that recorded metadata.
@@ -69,6 +71,12 @@ reports a real SD checkpoint; an irreversible loss is stored as an RMS1 `GAP`
 record before its sequence can become checkpointed. Follow
 [`tests/hardware/runbooks/M4_ACK_REPLAY.md`](tests/hardware/runbooks/M4_ACK_REPLAY.md)
 for the physical loss/recovery gate.
+
+The NEO-6M is configured for 1 Hz on Computer UART1 (RX GPIO0, TX GPIO1).
+GPS has a dedicated bounded queue and lower-priority task; missing fix, UART
+failure, or GPS backpressure never pauses local or remote IMU capture. Follow
+[`tests/hardware/runbooks/H4_GPS.md`](tests/hardware/runbooks/H4_GPS.md) before
+promoting the GPS feature branch.
 
 Before the first M2 bench test, provision each board's NVS using
 [`tools/provision_nvs.sh`](tools/provision_nvs.sh) and follow
