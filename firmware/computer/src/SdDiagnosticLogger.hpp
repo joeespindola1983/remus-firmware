@@ -7,6 +7,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "remus/core/Status.hpp"
 #include "remus/diagnostics/RotatingTextLog.hpp"
@@ -92,6 +93,8 @@ class SdDiagnosticLogger {
   QueueHandle_t queue_{nullptr};
   StaticQueue_t queueBuffer_{};
   std::uint8_t queueStorage_[kQueueCapacity * sizeof(LogEntry)]{};
+  SemaphoreHandle_t filesystemMutex_{nullptr};
+  StaticSemaphore_t filesystemMutexBuffer_{};
   StaticTask_t taskBuffer_{};
   StackType_t taskStack_[kTaskStackBytes]{};
   std::atomic<std::uint32_t> queued_{0};

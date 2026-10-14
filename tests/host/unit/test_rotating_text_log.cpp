@@ -91,12 +91,39 @@ void testReopenAppendsExistingLog() {
   std::filesystem::remove_all(directory);
 }
 
+void testOpenRotatesWhenMaximumLineCannotFit() {
+  const std::filesystem::path directory =
+      std::filesystem::temp_directory_path() /
+      ("remus-rotating-log-open-capacity-" +
+       std::to_string(static_cast<long>(getpid())));
+  std::filesystem::create_directories(directory);
+  const std::filesystem::path active = directory / "active.log";
+  const std::filesystem::path archive = directory / "archive.log";
+  const std::string previous(58, 'x');
+  {
+    std::ofstream output(active, std::ios::binary);
+    output << previous;
+  }
+
+  remus::diagnostics::RotatingTextLog log(
+      {active.c_str(), archive.c_str(), 64, 16});
+  EXPECT(log.open().ok());
+  EXPECT(log.stats().rotations == 1);
+  EXPECT(std::filesystem::file_size(active) == 0);
+  EXPECT(readAll(archive) == previous);
+  EXPECT(log.appendLine("new-entry").ok());
+  EXPECT(log.close().ok());
+
+  std::filesystem::remove_all(directory);
+}
+
 }  // namespace
 
 int main() {
   testRotationPreservesNewestBoundedSegments();
   testRejectsOversizedLine();
   testReopenAppendsExistingLog();
+  testOpenRotatesWhenMaximumLineCannotFit();
   if (failures == 0) {
     std::cout << "rotating text log tests passed\n";
   }

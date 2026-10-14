@@ -1,5 +1,6 @@
 #include "SdDiagnosticLogger.hpp"
 
+#include <cerrno>
 #include <cstdio>
 #include <cstring>
 #include <unistd.h>
@@ -104,6 +105,16 @@ Status SdDiagnosticLogger::start() noexcept {
     return Status::failure(Error::StorageUnavailable);
   }
 
+  filesystemMutex_ = xSemaphoreCreateMutexStatic(&filesystemMutexBuffer_);
+  if (filesystemMutex_ == nullptr) {
+    log_.close();
+    esp_vfs_fat_sdcard_unmount(kMountPoint, card_);
+    spi_bus_free(spiHost);
+    card_ = nullptr;
+    queue_ = nullptr;
+    return Status::failure(Error::StorageUnavailable);
+  }
+
   // ESP-IDF expresses task stack size in bytes and ESP32-C3 defines
   // StackType_t as uint8_t. FAT/stdio plus the bounded RMS1 encode buffers
   // exceed 2 KiB, so reserve the complete 8 KiB backing buffer.
@@ -114,6 +125,7 @@ Status SdDiagnosticLogger::start() noexcept {
     spi_bus_free(spiHost);
     card_ = nullptr;
     queue_ = nullptr;
+    filesystemMutex_ = nullptr;
     return Status::failure(Error::StorageUnavailable);
   }
 
@@ -153,8 +165,16 @@ Status SdDiagnosticLogger::startRecording(std::uint64_t recordingId,
   char path[64]{};
   std::snprintf(path, sizeof(path), "/sdcard/RM_%016llX.rms",
                 static_cast<unsigned long long>(recordingId));
+  if (filesystemMutex_ == nullptr ||
+      xSemaphoreTake(filesystemMutex_, portMAX_DELAY) != pdTRUE) {
+    return Status::failure(Error::Busy);
+  }
   rmsFile_ = std::fopen(path, "wb");
-  if (rmsFile_ == nullptr) return Status::failure(Error::StorageUnavailable);
+  if (rmsFile_ == nullptr) {
+    const std::uint32_t detail = static_cast<std::uint32_t>(errno);
+    xSemaphoreGive(filesystemMutex_);
+    return Status::failure(Error::StorageUnavailable, detail);
+  }
   storage::Rms1SessionHeader header{recordingId,
                                     computerId,
                                     pcBootId,
@@ -168,13 +188,16 @@ Status SdDiagnosticLogger::startRecording(std::uint64_t recordingId,
   Status status = storage::encodeSessionHeader(header, encoded, sizeof(encoded));
   if (!status.ok() || std::fwrite(encoded, 1, sizeof(encoded), rmsFile_) != sizeof(encoded) ||
       std::fflush(rmsFile_) != 0 || fsync(fileno(rmsFile_)) != 0) {
+    const std::uint32_t detail = static_cast<std::uint32_t>(errno);
     std::fclose(rmsFile_);
     rmsFile_ = nullptr;
-    return Status::failure(Error::IoFailure);
+    xSemaphoreGive(filesystemMutex_);
+    return Status::failure(Error::IoFailure, detail);
   }
   rmsBytes_.store(sizeof(encoded));
   rmsLastSyncUs_ = esp_timer_get_time();
   rmsHealthy_.store(true);
+  xSemaphoreGive(filesystemMutex_);
   return Status::success();
 }
 
@@ -246,7 +269,13 @@ void SdDiagnosticLogger::run() noexcept {
   for (;;) {
     if (xQueueReceive(queue_, &entry, portMAX_DELAY) == pdTRUE) {
       if (entry.kind == EntryKind::Diagnostic) {
-        if (!log_.appendLine(entry.line).ok()) ++writeFailures_;
+        Status writeStatus = Status::failure(Error::Busy);
+        if (filesystemMutex_ != nullptr &&
+            xSemaphoreTake(filesystemMutex_, portMAX_DELAY) == pdTRUE) {
+          writeStatus = log_.appendLine(entry.line);
+          xSemaphoreGive(filesystemMutex_);
+        }
+        if (!writeStatus.ok()) ++writeFailures_;
         rotations_.store(log_.stats().rotations);
         continue;
       }
