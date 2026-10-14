@@ -79,3 +79,30 @@ profile yet, so both role services deliberately log `mode=software_timer` and
 measure actual read timestamps, missed periods and maximum observed jitter.
 Gate H3 remains pending: it requires the two physical Blades, confirmed
 role-specific GPIO/DRDY wiring, 20-minute captures and measured loss/jitter.
+
+## M3/M5 partial bench capture — 2026-10-14
+
+Firmware `f5eaae6` was exercised on one Computer and one Blade with the Computer
+writing both raw IMU streams to the SD card. The resulting RMS1 file was parsed
+with `tools/remus-inspect/remus_inspect.py`; stable device identities are omitted
+from this evidence summary.
+
+| Item | Observed result |
+|---|---|
+| Release host suite | PASS; 11/11 tests |
+| Blade release build | PASS; RAM 63,476 B; app image 818,470 B |
+| Computer release build | PASS; RAM 112,004 B; app image 933,308 B |
+| Computer IMU | 15,520 samples over 77.595 s; 1,552 batches; zero inferred gaps |
+| Blade IMU | 9,810 samples over 49.043 s; 981 batches; zero inferred gaps |
+| Sample cadence | 5,000 us median for both sources; absolute P99 error 280 us (Computer) and 271 us (Blade) |
+| Acquisition health | Zero IMU errors and zero missed samples at the final health report; maximum reported Computer jitter 1,449 us |
+| RMS1 writer | 2,535 valid records; zero drops and zero write failures; queue high-water mark 3 |
+| Diagnostic writer | Zero drops and zero write failures; queue high-water mark 1 |
+| Radio | No reported DATA gap, send timeout, radio restart, or quarantine; observed RSSI from -47 to -59 dBm |
+
+This capture validates the repaired acquisition scheduler, separated SD queues,
+and transmit-callback recovery for the observed single-Blade interval. It does
+not close H3: a sustained capture with two Blades, Blade restart/reassociation,
+and the remaining boot-order cases are still required. GPS, replay/ACK
+checkpointing, clean session finalization, and OTA remain outside this captured
+firmware slice.
