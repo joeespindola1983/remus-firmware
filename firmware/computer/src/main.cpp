@@ -11,6 +11,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "remus/diagnostics/OperationalSerial.hpp"
 
 namespace {
 constexpr char kLogTag[] = "remus_computer";
@@ -45,7 +46,7 @@ extern "C" void app_main(void) {
              static_cast<unsigned>(sdStatus.error), static_cast<unsigned long>(sdStatus.detail));
   } else {
     const esp_app_desc_t* app = esp_app_get_description();
-    char bootDetails[320]{};
+    static char bootDetails[320]{};
     std::snprintf(bootDetails, sizeof(bootDetails),
                   "role=computer reset_reason=%u project=%s version=%s idf=%s "
                   "build_date=%s build_time=%s free_heap=%lu minimum_free_heap=%lu",
@@ -63,7 +64,7 @@ extern "C" void app_main(void) {
   if (!status.ok()) {
     ESP_LOGE(kLogTag, "runtime start failed: error=%u detail=%lu",
              static_cast<unsigned>(status.error), static_cast<unsigned long>(status.detail));
-    char failureDetails[96]{};
+    static char failureDetails[96]{};
     std::snprintf(failureDetails, sizeof(failureDetails), "error=%u detail=%lu",
                   static_cast<unsigned>(status.error), static_cast<unsigned long>(status.detail));
     if (sdLogger.isReady()) {
@@ -105,8 +106,7 @@ extern "C" void app_main(void) {
       radioService.setCaptureAllowed(true);
       acquisitionService.setStorageContext(&sdLogger, radioService.computerId(),
                                            radioService.bootId());
-      ESP_LOGI(kLogTag, "RMS1 recording started recording_id=%016llx",
-               static_cast<unsigned long long>(recordingId));
+      ESP_LOGI(kLogTag, "RMS1 recording: started");
     }
   }
 
@@ -118,7 +118,7 @@ extern "C" void app_main(void) {
              static_cast<unsigned>(acquisitionStatus.error),
              static_cast<unsigned long>(acquisitionStatus.detail));
     if (sdLogger.isReady()) {
-      char failureDetails[112]{};
+      static char failureDetails[112]{};
       std::snprintf(failureDetails, sizeof(failureDetails),
                     "error=%u detail=%lu sda=6 scl=5 address=0x68",
                     static_cast<unsigned>(acquisitionStatus.error),
@@ -127,7 +127,7 @@ extern "C" void app_main(void) {
                        "local_imu_start_failed", failureDetails);
     }
   } else if (sdLogger.isReady()) {
-    char readyDetails[144]{};
+    static char readyDetails[144]{};
     std::snprintf(readyDetails, sizeof(readyDetails),
                   "rate_hz=200 sda=6 scl=5 address=0x%02x identity=0x%02x mode=software_timer",
                   static_cast<unsigned>(acquisitionService.detectedAddress()),
@@ -136,11 +136,13 @@ extern "C" void app_main(void) {
                      readyDetails);
   }
 
+  remus::diagnostics::OperationalProblemCounters previousProblems{};
   for (;;) {
     const remus::diagnostics::HealthSnapshot health = runtime.healthSnapshot();
     const remus::acquisition::SamplingMetrics imu = acquisitionService.metrics();
     const remus::computer::SdDiagnosticLoggerStats sdLogStats = sdLogger.stats();
-    char healthDetails[512]{};
+    const remus::computer::ComputerRecoveryStats recovery = radioService.recoveryStats();
+    static char healthDetails[512]{};
     std::snprintf(healthDetails, sizeof(healthDetails),
                   "uptime_ms=%llu runtime_starts=%lu queue_overflows=%lu pool_exhaustions=%lu "
                   "invalid_handle_releases=%lu free_heap=%lu minimum_free_heap=%lu "
@@ -174,11 +176,43 @@ extern "C" void app_main(void) {
                   static_cast<unsigned long long>(sdLogStats.rmsBytes),
                   static_cast<unsigned long>(sdLogStats.diagnosticQueueHighWater),
                   static_cast<unsigned long>(sdLogStats.rmsQueueHighWater));
-    ESP_LOGI(kLogTag, "health %s", healthDetails);
     if (sdLogger.isReady() &&
         !sdLogger.enqueue(remus::computer::DiagnosticLogLevel::Info, "health", healthDetails)) {
       ESP_LOGW(kLogTag, "SD diagnostic log queue full; entry dropped");
     }
+    static char recoveryDetails[256]{};
+    std::snprintf(recoveryDetails, sizeof(recoveryDetails),
+                  "ack_frames_queued=%lu checkpoint_acks_queued=%lu "
+                  "replay_requests_queued=%lu duplicate_batches=%lu "
+                  "outside_window_batches=%lu unrecoverable_gaps=%lu",
+                  static_cast<unsigned long>(recovery.ackFramesQueued),
+                  static_cast<unsigned long>(recovery.checkpointAcksQueued),
+                  static_cast<unsigned long>(recovery.replayRequestsQueued),
+                  static_cast<unsigned long>(recovery.duplicateBatches),
+                  static_cast<unsigned long>(recovery.outsideWindowBatches),
+                  static_cast<unsigned long>(recovery.unrecoverableGaps));
+    if (sdLogger.isReady())
+      sdLogger.enqueue(remus::computer::DiagnosticLogLevel::Info, "radio_recovery",
+                       recoveryDetails);
+    const remus::diagnostics::OperationalProblemCounters currentProblems{
+        health.queueOverflows,
+        health.poolExhaustions,
+        health.invalidHandleReleases,
+        sdLogStats.dropped,
+        sdLogStats.writeFailures,
+        imu.readErrors,
+        imu.missedPeriods,
+        sdLogStats.rmsDropped,
+        sdLogStats.rmsWriteFailures,
+        recovery.duplicateBatches,
+        recovery.outsideWindowBatches,
+        recovery.unrecoverableGaps};
+    static char operationalProblems[384]{};
+    if (remus::diagnostics::formatNewOperationalProblems(
+            previousProblems, currentProblems, operationalProblems,
+            sizeof(operationalProblems)))
+      ESP_LOGW(kLogTag, "%s", operationalProblems);
+    previousProblems = currentProblems;
     vTaskDelay(kHealthLogInterval);
   }
 }

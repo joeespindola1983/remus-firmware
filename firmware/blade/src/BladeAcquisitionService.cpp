@@ -8,7 +8,6 @@
 namespace remus::blade {
 namespace {
 constexpr char kTag[] = "blade_acquisition";
-constexpr std::uint16_t kRateHz = 200;
 constexpr TickType_t kPollInterval = pdMS_TO_TICKS(1);
 static_assert(kPollInterval > 0, "Blade acquisition requires a 1 kHz FreeRTOS tick");
 }  // namespace
@@ -18,12 +17,13 @@ NativeTimestampUs BladeAcquisitionService::EspTimerClock::monotonicUs() const no
 }
 
 Status BladeAcquisitionService::start() noexcept {
-  Status status = pipeline_.initialize({kRateHz}, imu_, clock_, *this);
+  Status status = pipeline_.initialize({core::bladeImuProfile()}, imu_, clock_, *this);
   if (!status.ok()) return status;
   task_ = xTaskCreateStatic(taskEntry, "blade_imu", 4096, this, 12, taskStack_, &taskBuffer_);
   if (task_ == nullptr) return Status::failure(Error::NotReady);
   ESP_LOGW(kTag,
-           "ready rate_hz=200 sda=6 scl=5 address=0x%02x identity=0x%02x "
+           "ready rate_hz=200 accel_fs_g=16 gyro_fs_dps=2000 sda=6 scl=5 "
+           "address=0x%02x identity=0x%02x "
            "mode=software_timer drdy_gpio=unassigned fifo_supported=true",
            static_cast<unsigned>(imu_.detectedAddress()),
            static_cast<unsigned>(imu_.detectedIdentity()));

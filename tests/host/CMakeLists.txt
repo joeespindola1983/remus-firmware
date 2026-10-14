@@ -28,6 +28,7 @@ target_link_libraries(remus_hal INTERFACE remus_core)
 add_library(remus_diagnostics STATIC
   "${REPO_ROOT}/components/remus_diagnostics/src/EventLog.cpp"
   "${REPO_ROOT}/components/remus_diagnostics/src/HealthCounters.cpp"
+  "${REPO_ROOT}/components/remus_diagnostics/src/OperationalSerial.cpp"
   "${REPO_ROOT}/components/remus_diagnostics/src/RotatingTextLog.cpp"
 )
 target_include_directories(remus_diagnostics PUBLIC
@@ -37,12 +38,14 @@ target_link_libraries(remus_diagnostics PUBLIC remus_core)
 target_compile_options(remus_diagnostics PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 add_library(remus_link STATIC
+  "${REPO_ROOT}/components/remus_link/src/AckTracker.cpp"
   "${REPO_ROOT}/components/remus_link/src/BladeLinkStateMachine.cpp"
   "${REPO_ROOT}/components/remus_link/src/ComputerPeerStateMachine.cpp"
   "${REPO_ROOT}/components/remus_link/src/FrameCodec.cpp"
   "${REPO_ROOT}/components/remus_link/src/KeyDerivation.cpp"
   "${REPO_ROOT}/components/remus_link/src/MessageCodec.cpp"
   "${REPO_ROOT}/components/remus_link/src/RadioSupervisor.cpp"
+  "${REPO_ROOT}/components/remus_link/src/ReplayWindow.cpp"
   "${REPO_ROOT}/components/remus_link/src/SourceRegistry.cpp"
   "${REPO_ROOT}/components/remus_link/src/TxScheduler.cpp"
 )
@@ -81,6 +84,11 @@ target_link_libraries(test_rotating_text_log PRIVATE remus_diagnostics)
 target_compile_options(test_rotating_text_log PRIVATE -Wall -Wextra -Wpedantic -Werror)
 add_test(NAME rotating_text_log COMMAND test_rotating_text_log)
 
+add_executable(test_operational_serial unit/test_operational_serial.cpp)
+target_link_libraries(test_operational_serial PRIVATE remus_diagnostics)
+target_compile_options(test_operational_serial PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_test(NAME operational_serial COMMAND test_operational_serial)
+
 add_executable(test_remus_rf_v1 unit/test_remus_rf_v1.cpp)
 target_include_directories(test_remus_rf_v1 PRIVATE fakes)
 target_link_libraries(test_remus_rf_v1 PRIVATE remus_link remus_hal)
@@ -91,6 +99,11 @@ add_executable(test_link_state unit/test_link_state.cpp)
 target_link_libraries(test_link_state PRIVATE remus_link remus_hal)
 target_compile_options(test_link_state PRIVATE -Wall -Wextra -Wpedantic -Werror)
 add_test(NAME link_state COMMAND test_link_state)
+
+add_executable(test_ack_replay unit/test_ack_replay.cpp)
+target_link_libraries(test_ack_replay PRIVATE remus_link remus_hal)
+target_compile_options(test_ack_replay PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_test(NAME ack_replay COMMAND test_ack_replay)
 
 add_library(remus_acquisition STATIC
   "${REPO_ROOT}/components/remus_acquisition/src/AcquisitionPipeline.cpp"

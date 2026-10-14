@@ -17,6 +17,7 @@ RECORD_HEADER_SIZE = 48
 RECORD_CRC_SIZE = 4
 MAX_RECORD_SIZE = 1024
 IMU_BATCH = 0x03
+GAP = 0x05
 SOURCE_MANIFEST = 0x0A
 
 
@@ -134,8 +135,25 @@ def decode_manifest(record: Record):
             "lsb_per_dps_x10": values[13]}
 
 
+def decode_gap(record: Record):
+    if len(record.payload) != 28:
+        raise RmsError(f"tamanho GAP invalido no ordinal {record.ordinal}")
+    from_batch, through_batch, first_sample, last_sample, reason, flags = \
+        struct.unpack("<IIQQHH", record.payload)
+    if from_batch > through_batch or flags & ~1:
+        raise RmsError(f"campos GAP invalidos no ordinal {record.ordinal}")
+    last_sample_known = not flags & 1
+    if last_sample_known and last_sample < first_sample:
+        raise RmsError(f"intervalo GAP invalido no ordinal {record.ordinal}")
+    return {"from_batch": from_batch, "through_batch": through_batch,
+            "first_sample": first_sample,
+            "last_sample": last_sample if last_sample_known else None,
+            "reason": reason}
+
+
 def inspect(path: Path, csv_path: Path | None) -> None:
     source_stats = defaultdict(lambda: {"batches": 0, "samples": 0, "gaps": 0,
+                                        "explicit_gaps": 0, "lost_batches": 0,
                                         "next_batch": None, "next_sample": None})
     record_count = 0
     manifests = {}
@@ -156,6 +174,12 @@ def inspect(path: Path, csv_path: Path | None) -> None:
                 record_count += 1
                 if record.record_type == SOURCE_MANIFEST:
                     manifests[(record.origin_id, record.origin_boot_id)] = decode_manifest(record)
+                    continue
+                if record.record_type == GAP:
+                    gap = decode_gap(record)
+                    stats = source_stats[(record.origin_id, record.origin_boot_id)]
+                    stats["explicit_gaps"] += 1
+                    stats["lost_batches"] += gap["through_batch"] - gap["from_batch"] + 1
                     continue
                 if record.record_type != IMU_BATCH:
                     continue
@@ -193,7 +217,9 @@ def inspect(path: Path, csv_path: Path | None) -> None:
     for (origin_id, boot_id), stats in sorted(source_stats.items()):
         role = "computer" if origin_id == header.computer_id else "blade"
         print(f"source={role} id={origin_id} boot={boot_id} batches={stats['batches']} "
-              f"samples={stats['samples']} inferred_gaps={stats['gaps']}")
+              f"samples={stats['samples']} inferred_gaps={stats['gaps']} "
+              f"explicit_gaps={stats['explicit_gaps']} "
+              f"lost_batches={stats['lost_batches']}")
         manifest = manifests.get((origin_id, boot_id))
         if manifest:
             print(f"  imu_model=0x{manifest['imu_model']:02X} accel=+/-{manifest['accel_fs_g']}g "

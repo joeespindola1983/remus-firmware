@@ -1,11 +1,13 @@
 idf_component_register(
   SRCS
+    "src/AckTracker.cpp"
     "src/BladeLinkStateMachine.cpp"
     "src/ComputerPeerStateMachine.cpp"
     "src/FrameCodec.cpp"
     "src/KeyDerivation.cpp"
     "src/MessageCodec.cpp"
     "src/RadioSupervisor.cpp"
+    "src/ReplayWindow.cpp"
     "src/SourceRegistry.cpp"
     "src/TxScheduler.cpp"
   INCLUDE_DIRS "include"

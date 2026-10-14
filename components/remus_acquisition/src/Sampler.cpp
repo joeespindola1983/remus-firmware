@@ -1,16 +1,20 @@
 #include "remus/acquisition/Sampler.hpp"
 
+#include "remus/acquisition/ImuFlags.hpp"
+
 namespace remus::acquisition {
 
 Status Sampler::initialize(const SamplingConfig& config, hal::IImu& imu,
                            hal::IClock& clock) noexcept {
-  const auto clockStatus = sampleClock_.reset(config.rateHz, clock.monotonicUs());
+  const auto profileStatus = core::validateImuProfile(config.imuProfile);
+  if (!profileStatus.ok()) return profileStatus;
+  const auto clockStatus = sampleClock_.reset(config.imuProfile.sampleRateHz, clock.monotonicUs());
   if (!clockStatus.ok()) return clockStatus;
-  const auto imuStatus = imu.initialize(config.rateHz);
+  const auto imuStatus = imu.initialize(config.imuProfile);
   if (!imuStatus.ok()) return imuStatus;
   imu_ = &imu;
   clock_ = &clock;
-  rateHz_ = config.rateHz;
+  rateHz_ = config.imuProfile.sampleRateHz;
   metrics_ = {};
   return Status::success();
 }
@@ -41,7 +45,7 @@ PollResult Sampler::pollDue(NativeTimestampUs nowUs, ImuSample& out) noexcept {
   const auto jitter = sampledAtUs >= due.scheduledAtUs ? sampledAtUs - due.scheduledAtUs
                                                        : due.scheduledAtUs - sampledAtUs;
   if (jitter > metrics_.maxAbsJitterUs) metrics_.maxAbsJitterUs = jitter;
-  out = {due.index, sampledAtUs, raw, 0};
+  out = {due.index, sampledAtUs, raw, imuQualityFlags(raw)};
   ++metrics_.validSamples;
   return {true, Status::success()};
 }

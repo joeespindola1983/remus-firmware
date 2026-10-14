@@ -7,6 +7,7 @@
 #include "esp_random.h"
 #include "esp_timer.h"
 #include "nvs_flash.h"
+#include "remus/diagnostics/OperationalSerial.hpp"
 #include "remus/link/MessageCodec.hpp"
 
 namespace remus::computer {
@@ -15,7 +16,18 @@ constexpr char kTag[] = "computer_radio";
 constexpr MacAddress kBroadcast{{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}};
 constexpr std::int64_t kBeaconIntervalUs = 2000000;
 constexpr NativeTimestampUs kCandidateLifetimeUs = 10000000;
+constexpr NativeTimestampUs kSourceLivenessTimeoutUs = 5000000;
+constexpr NativeTimestampUs kRejectedHelloLogIntervalUs = 5000000;
+constexpr NativeTimestampUs kAckHeartbeatUs = 500000;
+constexpr NativeTimestampUs kReplayThrottleUs = 200000;
+constexpr std::uint32_t kAckBatchInterval = 10;
 }  // namespace
+
+ComputerRecoveryStats ComputerRadioService::recoveryStats() const noexcept {
+  return {ackFramesQueued_.load(), checkpointAcksQueued_.load(),
+          replayRequestsQueued_.load(), duplicateBatches_.load(),
+          outsideWindowBatches_.load(), unrecoverableGaps_.load()};
+}
 
 Status ComputerRadioService::start() noexcept {
   if (recordingId_ == 0) return Status::failure(Error::InvalidArgument);
@@ -51,7 +63,7 @@ Status ComputerRadioService::start() noexcept {
     radio_.stop();
     return Status::failure(Error::NotReady);
   }
-  ESP_LOGI(kTag, "state=Discovering channel=1 network=%lu", static_cast<unsigned long>(networkId_));
+  ESP_LOGI(kTag, "BLADE: waiting for connection");
   log(DiagnosticLogLevel::Info, "radio_discovering", "channel=1");
   return Status::success();
 }
@@ -126,12 +138,41 @@ void ComputerRadioService::run() noexcept {
           static_cast<NativeTimestampUs>(now) >= source->nextBindAttemptUs)
         sendBind(*source);
     }
+    for (auto& sink : dataSinks_) {
+      if (sink.bladeId == 0 || sink.ack.acceptedCount() == 0 ||
+          static_cast<NativeTimestampUs>(now) - sink.lastAckSentUs < kAckHeartbeatUs)
+        continue;
+      auto* source = registry_.find(sink.bladeId, sink.bladeBootId);
+      if (source != nullptr) sendAckAndReplay(*source, sink, true, now);
+    }
+    for (std::size_t index = 0; index < link::SourceRegistry::capacity(); ++index) {
+      auto* source = registry_.entryAt(index);
+      if (source == nullptr || source->state.state() != link::ComputerPeerState::Bound ||
+          source->staleReported || source->lastSeenUs == 0 ||
+          static_cast<NativeTimestampUs>(now) < source->lastSeenUs ||
+          static_cast<NativeTimestampUs>(now) - source->lastSeenUs <= kSourceLivenessTimeoutUs)
+        continue;
+      source->staleReported = true;
+      const auto active = registry_.liveBoundCount(static_cast<NativeTimestampUs>(now),
+                                                   kSourceLivenessTimeoutUs);
+      char details[160]{};
+      std::snprintf(details, sizeof(details),
+                    "blade_id=%llu boot=%lu active=%u reason=data_timeout",
+                    static_cast<unsigned long long>(source->bladeId),
+                    static_cast<unsigned long>(source->bladeBootId),
+                    static_cast<unsigned>(active));
+      ESP_LOGW(kTag, "BLADE: LOST %s", details);
+      log(DiagnosticLogLevel::Warning, "blade_stale", details);
+    }
     MacAddress removed[link::SourceRegistry::capacity()]{};
     const auto expired =
         registry_.expireCandidates(static_cast<NativeTimestampUs>(now), kCandidateLifetimeUs,
                                    removed, link::SourceRegistry::capacity());
     for (std::size_t index = 0; index < expired; ++index) radio_.removePeer(removed[index]);
-    if (expired) log(DiagnosticLogLevel::Warning, "blade_candidate_expired", "bind_timeout=true");
+    if (expired) {
+      ESP_LOGW(kTag, "BLADE: connection failed (BIND timeout)");
+      log(DiagnosticLogLevel::Warning, "blade_candidate_expired", "bind_timeout=true");
+    }
     const Status txStatus = tx_.poll(static_cast<NativeTimestampUs>(now));
     if (txStatus.error == Error::Timeout) {
       ESP_LOGE(kTag, "tx callback timeout; restarting ESP-NOW before next frame");
@@ -187,11 +228,25 @@ void ComputerRadioService::handleHello(const Event& event,
       hello.bladeId != frame.header.senderId || hello.bladeBootId != frame.header.senderBootId ||
       hello.computerIdSeen != computerId_ || hello.pcBootIdSeen != bootId_ || !hello.peerReady)
     return;
+  const auto* previous = registry_.findByAddress(event.meta.source);
+  const bool restarted = previous != nullptr && previous->bladeId == hello.bladeId &&
+                         previous->bladeBootId != hello.bladeBootId;
+  const DeviceBootId previousBootId = restarted ? previous->bladeBootId : 0;
   Status status =
       registry_.admit(hello.bladeId, hello.bladeBootId, event.meta.source, event.meta.localRxUs);
   if (!status.ok()) {
-    ESP_LOGW(kTag, "HELLO rejected error=%u", static_cast<unsigned>(status.error));
-    log(DiagnosticLogLevel::Warning, "blade_rejected", "reason=registry_policy");
+    if (lastRejectedHelloUs_ == 0 || event.meta.localRxUs < lastRejectedHelloUs_ ||
+        event.meta.localRxUs - lastRejectedHelloUs_ >= kRejectedHelloLogIntervalUs) {
+      char details[160]{};
+      std::snprintf(details, sizeof(details),
+                    "blade_id=%llu boot=%lu error=%u reason=registry_policy",
+                    static_cast<unsigned long long>(hello.bladeId),
+                    static_cast<unsigned long>(hello.bladeBootId),
+                    static_cast<unsigned>(status.error));
+      ESP_LOGW(kTag, "BLADE: REJECTED %s", details);
+      log(DiagnosticLogLevel::Warning, "blade_rejected", details);
+      lastRejectedHelloUs_ = event.meta.localRxUs;
+    }
     return;
   }
   auto* source = registry_.find(hello.bladeId, hello.bladeBootId);
@@ -205,10 +260,22 @@ void ComputerRadioService::handleHello(const Event& event,
     return;
   source->bindEpoch = esp_random();
   if (!source->bindEpoch) source->bindEpoch = 1;
-  ESP_LOGI(kTag, "blade candidate boot=%lu rssi=%d sources=%u",
-           static_cast<unsigned long>(hello.bladeBootId), event.meta.rssiDbm,
-           static_cast<unsigned>(registry_.size()));
-  log(DiagnosticLogLevel::Info, "blade_candidate", "peer_authenticated=true");
+  char details[192]{};
+  if (restarted) {
+    std::snprintf(details, sizeof(details),
+                  "blade_id=%llu previous_boot=%08lx boot=%08lx rssi=%d",
+                  static_cast<unsigned long long>(hello.bladeId),
+                  static_cast<unsigned long>(previousBootId),
+                  static_cast<unsigned long>(hello.bladeBootId), event.meta.rssiDbm);
+    ESP_LOGW(kTag, "BLADE: RESTARTED %s", details);
+    log(DiagnosticLogLevel::Warning, "blade_restarted", details);
+  } else {
+    std::snprintf(details, sizeof(details), "blade_id=%llu boot=%08lx rssi=%d",
+                  static_cast<unsigned long long>(hello.bladeId),
+                  static_cast<unsigned long>(hello.bladeBootId), event.meta.rssiDbm);
+    ESP_LOGI(kTag, "BLADE: detected %s", details);
+    log(DiagnosticLogLevel::Info, "blade_candidate", details);
+  }
   sendBind(*source);
 }
 void ComputerRadioService::sendBind(link::SourceEntry& source) noexcept {
@@ -252,12 +319,25 @@ void ComputerRadioService::handlePaired(const Event& event) noexcept {
       clear.header.networkId != networkId_ || clear.header.senderId != source->bladeId ||
       clear.header.senderBootId != source->bladeBootId)
     return;
+  const bool resumed = source->staleReported;
+  source->lastSeenUs = event.meta.localRxUs;
+  source->staleReported = false;
+  if (resumed) {
+    char details[128]{};
+    std::snprintf(details, sizeof(details), "blade_id=%llu boot=%08lx",
+                  static_cast<unsigned long long>(source->bladeId),
+                  static_cast<unsigned long>(source->bladeBootId));
+    ESP_LOGI(kTag, "BLADE: RESUMED %s", details);
+    log(DiagnosticLogLevel::Info, "blade_resumed", details);
+  }
   if (clear.header.type == link::MessageType::BindAck)
     handleBindAck(*source, clear);
   else if (clear.header.type == link::MessageType::SourceManifest)
     handleSourceManifest(*source, clear);
   else if (clear.header.type == link::MessageType::DataBatch)
     handleDataBatch(*source, event, clear);
+  else if (clear.header.type == link::MessageType::GapNotice)
+    handleGapNotice(*source, clear);
 }
 
 void ComputerRadioService::handleSourceManifest(link::SourceEntry& source,
@@ -285,9 +365,15 @@ void ComputerRadioService::handleBindAck(link::SourceEntry& source,
       ack.pcBootId != bootId_ || ack.sessionId != recordingId_ || ack.resultCode != 0 ||
       !source.state.onBindAck(ack.bindEpoch).ok())
     return;
-  ESP_LOGI(kTag, "blade state=Bound boot=%lu sources=%u",
-           static_cast<unsigned long>(ack.bladeBootId), static_cast<unsigned>(registry_.size()));
-  log(DiagnosticLogLevel::Info, "blade_bound", "application_ack=true");
+  const auto active = registry_.liveBoundCount(
+      static_cast<NativeTimestampUs>(esp_timer_get_time()), kSourceLivenessTimeoutUs);
+  char details[160]{};
+  std::snprintf(details, sizeof(details), "blade_id=%llu boot=%08lx active=%u",
+                static_cast<unsigned long long>(ack.bladeId),
+                static_cast<unsigned long>(ack.bladeBootId),
+                static_cast<unsigned>(active));
+  ESP_LOGI(kTag, "BLADE: CONNECTED %s", details);
+  log(DiagnosticLogLevel::Info, "blade_bound", details);
 }
 
 void ComputerRadioService::handleDataBatch(link::SourceEntry& source, const Event& event,
@@ -300,61 +386,197 @@ void ComputerRadioService::handleDataBatch(link::SourceEntry& source, const Even
     log(DiagnosticLogLevel::Warning, "data_batch_rejected", "reason=payload_invalid");
     return;
   }
+  DataSinkStats* sink = dataSink(source.bladeId, source.bladeBootId);
+  if (sink == nullptr) {
+    log(DiagnosticLogLevel::Error, "data_batch_rejected", "reason=sink_capacity");
+    return;
+  }
+  const auto admission = sink->ack.accept(batch.batchSeq);
+  if (admission.disposition == link::AcceptDisposition::Duplicate) {
+    ++sink->duplicates;
+    ++duplicateBatches_;
+    sendAckAndReplay(source, *sink, true, event.meta.localRxUs);
+    return;
+  }
+  if (admission.disposition == link::AcceptDisposition::OutsideWindow) {
+    ++sink->outsideWindow;
+    ++outsideWindowBatches_;
+    ++sink->gaps;
+    sendAckAndReplay(source, *sink, true, event.meta.localRxUs);
+    log(DiagnosticLogLevel::Warning, "data_outside_ack_window", "replay_requested=true");
+    return;
+  }
   if (diagnosticLog_ == nullptr ||
       !diagnosticLog_->enqueueImuBatch(source.bladeId, source.bladeBootId, batch.batchSeq,
                                        clear.header.originMonoUs, event.meta.localRxUs,
                                        event.meta.rssiDbm, clear.payload.data(),
                                        clear.payloadSize)) {
+    sink->ack.reject(batch.batchSeq);
     log(DiagnosticLogLevel::Error, "rms_batch_rejected", "reason=storage_queue_full");
     return;
   }
-  DataSinkStats* sink = nullptr;
-  for (auto& candidate : dataSinks_) {
-    if ((candidate.bladeId == source.bladeId && candidate.bladeBootId == source.bladeBootId) ||
-        candidate.bladeId == 0) {
-      sink = &candidate;
-      break;
-    }
+  if (!sink->ack.markQueued(batch.batchSeq).ok()) {
+    log(DiagnosticLogLevel::Error, "data_batch_rejected", "reason=ack_state");
+    return;
   }
-  if (sink == nullptr) return;
-  if (sink->bladeId == 0) {
-    sink->bladeId = source.bladeId;
-    sink->bladeBootId = source.bladeBootId;
-    sink->nextBatchSeq = batch.batchSeq;
-    sink->nextSampleIndex = batch.firstSampleIndex;
-  }
-  if (batch.batchSeq != sink->nextBatchSeq || batch.firstSampleIndex != sink->nextSampleIndex) {
+  if (admission.gapDetected) {
     ++sink->gaps;
     char details[192]{};
     std::snprintf(details, sizeof(details),
-                  "blade_id=%llu expected_batch=%lu actual_batch=%lu expected_sample=%llu "
-                  "actual_sample=%llu",
+                  "blade_id=%llu actual_batch=%lu actual_sample=%llu replay_requested=true",
                   static_cast<unsigned long long>(source.bladeId),
-                  static_cast<unsigned long>(sink->nextBatchSeq),
                   static_cast<unsigned long>(batch.batchSeq),
-                  static_cast<unsigned long long>(sink->nextSampleIndex),
                   static_cast<unsigned long long>(batch.firstSampleIndex));
     ESP_LOGW(kTag, "DATA gap %s", details);
     log(DiagnosticLogLevel::Warning, "data_gap", details);
   }
-  sink->nextBatchSeq = batch.batchSeq + 1;
-  sink->nextSampleIndex = batch.firstSampleIndex + batch.sampleCount;
   ++sink->batches;
   sink->samples += batch.sampleCount;
+  if (admission.gapDetected ||
+      sink->ack.acceptedCount() - sink->acceptedAtLastAck >= kAckBatchInterval)
+    sendAckAndReplay(source, *sink, true, event.meta.localRxUs);
   if (sink->batches % 20 == 0) {
+    if (batch.sampleCount > 0) {
+      const auto& sample = batch.samples[batch.sampleCount - 1];
+      const diagnostics::ImuRawPreview preview{sample.ax, sample.ay, sample.az, sample.gx,
+                                               sample.gy, sample.gz, sample.flags};
+      char line[160]{};
+      if (diagnostics::formatImuRawPreview("BLADE", source.bladeBootId, preview, line,
+                                           sizeof(line)))
+        ESP_LOGI(kTag, "%s", line);
+    }
     char details[224]{};
     std::snprintf(details, sizeof(details),
                   "blade_id=%llu boot=%lu batches=%llu samples=%llu gaps=%lu rssi=%d "
-                  "last_batch=%lu",
+                  "duplicates=%lu outside_window=%lu last_batch=%lu",
                   static_cast<unsigned long long>(source.bladeId),
                   static_cast<unsigned long>(source.bladeBootId),
                   static_cast<unsigned long long>(sink->batches),
                   static_cast<unsigned long long>(sink->samples),
                   static_cast<unsigned long>(sink->gaps), event.meta.rssiDbm,
+                  static_cast<unsigned long>(sink->duplicates),
+                  static_cast<unsigned long>(sink->outsideWindow),
                   static_cast<unsigned long>(batch.batchSeq));
-    ESP_LOGI(kTag, "DATA sink %s", details);
     log(DiagnosticLogLevel::Info, "data_sink", details);
   }
+}
+
+ComputerRadioService::DataSinkStats* ComputerRadioService::dataSink(
+    BladeId bladeId, DeviceBootId bladeBootId) noexcept {
+  DataSinkStats* empty = nullptr;
+  DataSinkStats* previousBoot = nullptr;
+  for (auto& candidate : dataSinks_) {
+    if (candidate.bladeId == bladeId && candidate.bladeBootId == bladeBootId) return &candidate;
+    if (candidate.bladeId == bladeId && previousBoot == nullptr) previousBoot = &candidate;
+    if (candidate.bladeId == 0 && empty == nullptr) empty = &candidate;
+  }
+  if (previousBoot != nullptr) {
+    *previousBoot = DataSinkStats{};
+    previousBoot->bladeId = bladeId;
+    previousBoot->bladeBootId = bladeBootId;
+    return previousBoot;
+  }
+  if (empty != nullptr) {
+    empty->bladeId = bladeId;
+    empty->bladeBootId = bladeBootId;
+  }
+  return empty;
+}
+
+void ComputerRadioService::sendAckAndReplay(link::SourceEntry& source, DataSinkStats& sink,
+                                            bool allowReplay,
+                                            NativeTimestampUs nowUs) noexcept {
+  std::uint32_t checkpointed = 0;
+  if (diagnosticLog_ != nullptr &&
+      diagnosticLog_->checkpointedThrough(source.bladeId, source.bladeBootId, checkpointed))
+    sink.ack.markCheckpointedThrough(checkpointed);
+
+  const link::AckWindow ack = sink.ack.buildAckWindow(source.bladeId, source.bladeBootId);
+  std::uint8_t payload[link::kAckWindowPayloadBytes]{};
+  std::size_t payloadSize = 0;
+  if (link::MessageCodec::encode(ack, payload, sizeof(payload), payloadSize).ok()) {
+    const link::FrameHeader header{link::MessageType::AckWindow,
+                                   0,
+                                   networkId_,
+                                   computerId_,
+                                   bootId_,
+                                   recordingId_,
+                                   ++messageSeq_,
+                                   nowUs};
+    link::EncodedFrame frame{};
+    if (codec_.encode(header, payload, payloadSize, source.pairKeys.pairAuthKey.data(),
+                      source.pairKeys.pairAuthKey.size(), frame).ok() &&
+        tx_.enqueue(source.address, frame.bytes.data(), frame.size).ok()) {
+      sink.lastAckSentUs = nowUs;
+      sink.acceptedAtLastAck = sink.ack.acceptedCount();
+      ++ackFramesQueued_;
+      if (ack.checkpointedValid) ++checkpointAcksQueued_;
+    }
+  }
+
+  link::ReplayRequest request{};
+  if (!allowReplay || !sink.ack.nextReplayRequest(source.bladeId, source.bladeBootId, request) ||
+      (sink.lastReplayValid && sink.lastReplayFirstSeq == request.firstSeq &&
+       nowUs - sink.lastReplayRequestUs < kReplayThrottleUs))
+    return;
+  std::uint8_t replayPayload[link::kReplayRequestPayloadBytes]{};
+  payloadSize = 0;
+  if (!link::MessageCodec::encode(request, replayPayload, sizeof(replayPayload), payloadSize).ok())
+    return;
+  const link::FrameHeader replayHeader{link::MessageType::ReplayRequest,
+                                       0,
+                                       networkId_,
+                                       computerId_,
+                                       bootId_,
+                                       recordingId_,
+                                       ++messageSeq_,
+                                       nowUs};
+  link::EncodedFrame replayFrame{};
+  if (codec_.encode(replayHeader, replayPayload, payloadSize,
+                    source.pairKeys.pairAuthKey.data(), source.pairKeys.pairAuthKey.size(),
+                    replayFrame).ok() &&
+      tx_.enqueue(source.address, replayFrame.bytes.data(), replayFrame.size).ok()) {
+    sink.lastReplayValid = true;
+    sink.lastReplayFirstSeq = request.firstSeq;
+    sink.lastReplayRequestUs = nowUs;
+    ++replayRequestsQueued_;
+  }
+}
+
+void ComputerRadioService::handleGapNotice(link::SourceEntry& source,
+                                           const link::DecodedFrame& clear) noexcept {
+  if (source.state.state() != link::ComputerPeerState::Bound ||
+      clear.header.recordingId != recordingId_)
+    return;
+  link::GapNotice gap{};
+  if (!link::MessageCodec::decode(clear.payload.data(), clear.payloadSize, gap).ok() ||
+      gap.bladeId != source.bladeId || gap.bladeBootId != source.bladeBootId)
+    return;
+  DataSinkStats* sink = dataSink(source.bladeId, source.bladeBootId);
+  if (sink == nullptr || !sink->ack.canSealGap(gap.fromSeq, gap.throughSeq)) {
+    log(DiagnosticLogLevel::Error, "gap_rejected", "reason=ack_window");
+    return;
+  }
+  if (diagnosticLog_ == nullptr ||
+      !diagnosticLog_->enqueueGap(source.bladeId, source.bladeBootId, gap.fromSeq,
+                                  gap.throughSeq, gap.firstSampleIndex, gap.reason)) {
+    log(DiagnosticLogLevel::Error, "gap_rejected", "reason=storage_queue_full");
+    return;
+  }
+  sink->ack.sealGap(gap.fromSeq, gap.throughSeq);
+  ++sink->unrecoverableGaps;
+  ++unrecoverableGaps_;
+  char details[160]{};
+  std::snprintf(details, sizeof(details),
+                "blade_id=%llu from_batch=%lu through_batch=%lu first_sample=%llu",
+                static_cast<unsigned long long>(source.bladeId),
+                static_cast<unsigned long>(gap.fromSeq),
+                static_cast<unsigned long>(gap.throughSeq),
+                static_cast<unsigned long long>(gap.firstSampleIndex));
+  ESP_LOGE(kTag, "unrecoverable DATA gap %s", details);
+  log(DiagnosticLogLevel::Error, "unrecoverable_data_gap", details);
+  sendAckAndReplay(source, *sink, true,
+                   static_cast<NativeTimestampUs>(esp_timer_get_time()));
 }
 void ComputerRadioService::sendBeacon() noexcept {
   link::Beacon beacon{computerId_, bootId_, 1, 0, ++beaconSeq_, 0};

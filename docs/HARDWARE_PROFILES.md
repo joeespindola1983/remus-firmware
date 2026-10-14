@@ -16,6 +16,13 @@ inspected; this software setting is not evidence of physical capacity.
 - No SD, GPS, or display
 - USB: boot/console capability pending assembled-device verification
 
+The current P0 software candidate requests MPU-6050 accelerometer range ±16 g,
+gyroscope range ±2000 degrees/s, DLPF code 3 and 200 Hz. The driver writes and
+reads back those register fields before exposing a verified effective profile.
+This choice increases headroom for rapid equipment motion but reduces
+sensitivity per count; it is not physically qualified until stationary-noise,
+known-motion and near-rail measurements are captured on the assembled Blade.
+
 ## Computer v1 reference
 
 - MCU: ESP32-C3; exact board and flash unverified
@@ -28,6 +35,12 @@ inspected; this software setting is not evidence of physical capacity.
 - Diagnostic microSD adapter: MISO 8, MOSI 10, SCK 20, CS 21; 10 MHz SPI,
   software integration complete but electrical/card compatibility unverified
 - Display pins and display support are outside the MVP
+
+The current P0 software candidate requests MPU-6050 accelerometer range ±8 g,
+gyroscope range ±1000 degrees/s, DLPF code 3 and 200 Hz for the Computer. Its
+`SourceManifest` is generated from the register profile that the driver read
+back, not from duplicated constants. This remains a bench candidate rather
+than evidence that the physical module has the nominal MPU-6050 sensitivity.
 
 These values are evidence from the existing prototype profile, not approval of
 an electrical design. A bench review must verify boot straps, USB/UART conflicts,

@@ -242,4 +242,94 @@ Status MessageCodec::decode(const std::uint8_t* in, std::size_t n, DataBatch& v)
   }
   return Status::success();
 }
+
+Status MessageCodec::encode(const AckWindow& v, std::uint8_t* out, std::size_t cap,
+                            std::size_t& n) noexcept {
+  constexpr std::uint16_t knownHealth = kReceiverHealthAcceptedValid |
+                                        kReceiverHealthCheckpointedValid |
+                                        kReceiverHealthStorageDegraded;
+  const bool acceptedValid = (v.receiverHealth & kReceiverHealthAcceptedValid) != 0;
+  const bool checkpointedValid =
+      (v.receiverHealth & kReceiverHealthCheckpointedValid) != 0;
+  if (!valid(out, cap, kAckWindowPayloadBytes) || v.bladeId == 0 || v.bladeBootId == 0 ||
+      (v.receiverHealth & ~knownHealth) != 0 || v.reserved != 0 ||
+      (checkpointedValid && (!acceptedValid || v.checkpointedThrough > v.acceptedThrough)))
+    return invalid();
+  Writer w(out, cap);
+  if (!w.u64(v.bladeId) || !w.u32(v.bladeBootId) || !w.u32(v.acceptedThrough) ||
+      !w.u32(v.receivedBitmap) || !w.u32(v.checkpointedThrough) ||
+      !w.u16(v.receiverHealth) || !w.zeros(2))
+    return invalid();
+  n = w.size();
+  return Status::success();
+}
+
+Status MessageCodec::decode(const std::uint8_t* in, std::size_t n, AckWindow& v) noexcept {
+  if (!valid(in, n, kAckWindowPayloadBytes) || n != kAckWindowPayloadBytes) return invalid();
+  Reader r(in, n);
+  if (!r.u64(v.bladeId) || !r.u32(v.bladeBootId) || !r.u32(v.acceptedThrough) ||
+      !r.u32(v.receivedBitmap) || !r.u32(v.checkpointedThrough) ||
+      !r.u16(v.receiverHealth) || !r.reserved(2) || v.bladeId == 0 || v.bladeBootId == 0 ||
+      (v.receiverHealth & ~(kReceiverHealthAcceptedValid |
+                            kReceiverHealthCheckpointedValid |
+                            kReceiverHealthStorageDegraded)) != 0)
+    return invalid();
+  v.reserved = 0;
+  v.acceptedValid = (v.receiverHealth & kReceiverHealthAcceptedValid) != 0;
+  v.checkpointedValid = (v.receiverHealth & kReceiverHealthCheckpointedValid) != 0;
+  if (v.checkpointedValid &&
+      (!v.acceptedValid || v.checkpointedThrough > v.acceptedThrough))
+    return invalid();
+  return Status::success();
+}
+
+Status MessageCodec::encode(const ReplayRequest& v, std::uint8_t* out, std::size_t cap,
+                            std::size_t& n) noexcept {
+  if (!valid(out, cap, kReplayRequestPayloadBytes) || v.bladeId == 0 ||
+      v.bladeBootId == 0 || v.count == 0 || v.count > 16)
+    return invalid();
+  Writer w(out, cap);
+  if (!w.u64(v.bladeId) || !w.u32(v.bladeBootId) || !w.u32(v.firstSeq) ||
+      !w.u8(v.count) || !w.u8(v.reason) || !w.zeros(2))
+    return invalid();
+  n = w.size();
+  return Status::success();
+}
+
+Status MessageCodec::decode(const std::uint8_t* in, std::size_t n,
+                            ReplayRequest& v) noexcept {
+  if (!valid(in, n, kReplayRequestPayloadBytes) || n != kReplayRequestPayloadBytes)
+    return invalid();
+  Reader r(in, n);
+  return r.u64(v.bladeId) && r.u32(v.bladeBootId) && r.u32(v.firstSeq) &&
+                 r.u8(v.count) && r.u8(v.reason) && r.reserved(2) && v.bladeId != 0 &&
+                 v.bladeBootId != 0 && v.count != 0 && v.count <= 16
+             ? Status::success()
+             : invalid();
+}
+
+Status MessageCodec::encode(const GapNotice& v, std::uint8_t* out, std::size_t cap,
+                            std::size_t& n) noexcept {
+  if (!valid(out, cap, kGapNoticePayloadBytes) || v.bladeId == 0 ||
+      v.bladeBootId == 0 || v.fromSeq > v.throughSeq)
+    return invalid();
+  Writer w(out, cap);
+  if (!w.u64(v.bladeId) || !w.u32(v.bladeBootId) || !w.u32(v.fromSeq) ||
+      !w.u32(v.throughSeq) || !w.u64(v.firstSampleIndex) || !w.u16(v.reason) ||
+      !w.zeros(2))
+    return invalid();
+  n = w.size();
+  return Status::success();
+}
+
+Status MessageCodec::decode(const std::uint8_t* in, std::size_t n, GapNotice& v) noexcept {
+  if (!valid(in, n, kGapNoticePayloadBytes) || n != kGapNoticePayloadBytes) return invalid();
+  Reader r(in, n);
+  return r.u64(v.bladeId) && r.u32(v.bladeBootId) && r.u32(v.fromSeq) &&
+                 r.u32(v.throughSeq) && r.u64(v.firstSampleIndex) && r.u16(v.reason) &&
+                 r.reserved(2) && v.bladeId != 0 && v.bladeBootId != 0 &&
+                 v.fromSeq <= v.throughSeq
+             ? Status::success()
+             : invalid();
+}
 }  // namespace remus::link

@@ -3,6 +3,7 @@
 
 #include "remus/core/FixedQueue.hpp"
 #include "remus/core/Ids.hpp"
+#include "remus/core/ImuProfile.hpp"
 #include "remus/core/PacketPool.hpp"
 
 namespace {
@@ -66,12 +67,47 @@ void testPoolDetectsExhaustionAndStaleHandles() {
   EXPECT(pool.inUse() == 2);
 }
 
+void testRoleSpecificImuProfilesHaveTypedRangesAndSensitivities() {
+  const auto computer = remus::core::computerImuProfile();
+  EXPECT(computer.accelRange == remus::core::AccelRangeG::G8);
+  EXPECT(computer.gyroRange == remus::core::GyroRangeDps::Dps1000);
+  EXPECT(remus::core::accelLsbPerG(computer.accelRange) == 4096);
+  EXPECT(remus::core::gyroLsbPerDpsX10(computer.gyroRange) == 328);
+  EXPECT(remus::core::accelRegisterBits(computer.accelRange) == 0x10);
+  EXPECT(remus::core::gyroRegisterBits(computer.gyroRange) == 0x10);
+  EXPECT(remus::core::validateImuProfile(computer).ok());
+
+  const auto blade = remus::core::bladeImuProfile();
+  EXPECT(blade.accelRange == remus::core::AccelRangeG::G16);
+  EXPECT(blade.gyroRange == remus::core::GyroRangeDps::Dps2000);
+  EXPECT(remus::core::accelLsbPerG(blade.accelRange) == 2048);
+  EXPECT(remus::core::gyroLsbPerDpsX10(blade.gyroRange) == 164);
+  EXPECT(remus::core::accelRegisterBits(blade.accelRange) == 0x18);
+  EXPECT(remus::core::gyroRegisterBits(blade.gyroRange) == 0x18);
+  EXPECT(remus::core::validateImuProfile(blade).ok());
+}
+
+void testInvalidImuProfileIsRejected() {
+  auto profile = remus::core::computerImuProfile();
+  profile.dlpfCode = 7;
+  EXPECT(profile.gyroDlpfBandwidthHz() == 0);
+  EXPECT(remus::core::validateImuProfile(profile).error == remus::Error::InvalidArgument);
+  profile = remus::core::computerImuProfile();
+  profile.dlpfCode = 0;
+  EXPECT(remus::core::validateImuProfile(profile).error == remus::Error::InvalidArgument);
+  profile = remus::core::computerImuProfile();
+  profile.sampleRateHz = 333;
+  EXPECT(remus::core::validateImuProfile(profile).error == remus::Error::InvalidArgument);
+}
+
 }  // namespace
 
 int main() {
   testIdentifiersAndSequenceWrap();
   testQueueRejectsOverflowWithoutOverwrite();
   testPoolDetectsExhaustionAndStaleHandles();
+  testRoleSpecificImuProfilesHaveTypedRangesAndSensitivities();
+  testInvalidImuProfileIsRejected();
   if (failures == 0) {
     std::cout << "core tests passed\n";
   }

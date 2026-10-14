@@ -4,7 +4,9 @@
 
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "remus/diagnostics/OperationalSerial.hpp"
 #include "remus/link/MessageCodec.hpp"
+#include "remus/link/SourceManifestBuilder.hpp"
 
 namespace remus::computer {
 namespace {
@@ -18,12 +20,13 @@ NativeTimestampUs ComputerAcquisitionService::EspTimerClock::monotonicUs() const
 }
 
 Status ComputerAcquisitionService::start(RecordingId recordingId) noexcept {
-  auto status = pipeline_.initialize({200}, imu_, clock_, *this);
+  auto status = pipeline_.initialize({core::computerImuProfile()}, imu_, clock_, *this);
   if (!status.ok()) return status;
   status = pipeline_.startSession(recordingId);
   if (!status.ok()) return status;
-  link::SourceManifest manifest{computerId_, bootId_, imu_.detectedIdentity(), 8, 500, 42, 200,
-                                0, 0, 0, 0, 0, 4096, 655};
+  link::SourceManifest manifest{};
+  status = link::buildSourceManifest(computerId_, bootId_, imu_.effectiveProfile(), manifest);
+  if (!status.ok()) return status;
   std::uint8_t manifestPayload[link::kSourceManifestPayloadBytes]{};
   std::size_t manifestSize = 0;
   status = link::MessageCodec::encode(manifest, manifestPayload, sizeof(manifestPayload),
@@ -33,11 +36,7 @@ Status ComputerAcquisitionService::start(RecordingId recordingId) noexcept {
     return Status::failure(Error::QueueFull);
   task_ = xTaskCreateStatic(taskEntry, "computer_imu", 4096, this, 12, taskStack_, &taskBuffer_);
   if (task_ == nullptr) return Status::failure(Error::NotReady);
-  ESP_LOGW(kTag,
-           "ready source=computer_local_imu rate_hz=200 address=0x%02x identity=0x%02x "
-           "mode=software_timer drdy_gpio=unassigned fifo_supported=true",
-           static_cast<unsigned>(imu_.detectedAddress()),
-           static_cast<unsigned>(imu_.detectedIdentity()));
+  ESP_LOGI(kTag, "IMU: ready");
   return Status::success();
 }
 
@@ -82,11 +81,13 @@ Status ComputerAcquisitionService::onBatchReady(
     return Status::failure(Error::QueueFull);
   ++batchCount_;
   sampleCount_ += batch.count;
-  if (batchCount_ % 20 == 0) {
-    ESP_LOGI(kTag, "sink batches=%llu samples=%llu last_batch_seq=%lu",
-             static_cast<unsigned long long>(batchCount_),
-             static_cast<unsigned long long>(sampleCount_),
-             static_cast<unsigned long>(batch.batchSeq));
+  if (batch.count > 0 && diagnostics::shouldEmitImuPreview(batchCount_)) {
+    const auto& raw = batch.samples[batch.count - 1].raw;
+    const diagnostics::ImuRawPreview preview{raw.ax, raw.ay, raw.az, raw.gx, raw.gy, raw.gz,
+                                             batch.samples[batch.count - 1].flags};
+    char line[160]{};
+    if (diagnostics::formatImuRawPreview("PC", 0, preview, line, sizeof(line)))
+      ESP_LOGI(kTag, "%s", line);
   }
   return Status::success();
 }
