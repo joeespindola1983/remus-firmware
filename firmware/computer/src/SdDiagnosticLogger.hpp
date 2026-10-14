@@ -12,6 +12,7 @@
 #include "freertos/task.h"
 #include "remus/core/Status.hpp"
 #include "remus/diagnostics/RotatingTextLog.hpp"
+#include "remus/storage/Rms1Codec.hpp"
 #include "sdmmc_cmd.h"
 
 namespace remus::computer {
@@ -31,6 +32,10 @@ struct SdDiagnosticLoggerStats {
   std::uint64_t rmsBytes{0};
   std::uint32_t diagnosticQueueHighWater{0};
   std::uint32_t rmsQueueHighWater{0};
+  std::uint32_t gpsQueued{0};
+  std::uint32_t gpsWritten{0};
+  std::uint32_t gpsDropped{0};
+  std::uint32_t gpsQueueHighWater{0};
 };
 
 class SdDiagnosticLogger {
@@ -51,6 +56,9 @@ class SdDiagnosticLogger {
   bool enqueueGap(std::uint64_t originId, std::uint32_t originBootId,
                   std::uint32_t fromBatchSeq, std::uint32_t throughBatchSeq,
                   std::uint64_t firstSampleIndex, std::uint16_t reason) noexcept;
+  bool enqueueGpsFix(std::uint64_t originId, std::uint32_t originBootId,
+                     std::uint32_t sequence,
+                     const storage::GpsFixPayload& fix) noexcept;
   SdDiagnosticLoggerStats stats() const noexcept;
   bool checkpointedThrough(std::uint64_t originId, std::uint32_t originBootId,
                            std::uint32_t& batchSeq) const noexcept;
@@ -60,6 +68,7 @@ class SdDiagnosticLogger {
  private:
   static constexpr std::size_t kDiagnosticQueueCapacity = 16;
   static constexpr std::size_t kRmsQueueCapacity = 96;
+  static constexpr std::size_t kGpsQueueCapacity = 16;
   static constexpr std::size_t kLineCapacity = 640;
   static constexpr std::uint32_t kTaskStackBytes = 8192;
 
@@ -97,6 +106,12 @@ class SdDiagnosticLogger {
     };
     RmsEntry() noexcept : imu{} {}
   };
+  struct GpsEntry {
+    std::uint64_t originId{0};
+    std::uint32_t originBootId{0};
+    std::uint32_t sequence{0};
+    storage::GpsFixPayload fix{};
+  };
 
   static void taskEntry(void* context) noexcept;
   void run() noexcept;
@@ -128,6 +143,9 @@ class SdDiagnosticLogger {
   QueueHandle_t rmsQueue_{nullptr};
   StaticQueue_t rmsQueueBuffer_{};
   std::uint8_t rmsQueueStorage_[kRmsQueueCapacity * sizeof(RmsEntry)]{};
+  QueueHandle_t gpsQueue_{nullptr};
+  StaticQueue_t gpsQueueBuffer_{};
+  std::uint8_t gpsQueueStorage_[kGpsQueueCapacity * sizeof(GpsEntry)]{};
   SemaphoreHandle_t filesystemMutex_{nullptr};
   StaticSemaphore_t filesystemMutexBuffer_{};
   StaticTask_t taskBuffer_{};
@@ -145,6 +163,10 @@ class SdDiagnosticLogger {
   std::atomic<std::uint64_t> rmsBytes_{0};
   std::atomic<std::uint32_t> diagnosticQueueHighWater_{0};
   std::atomic<std::uint32_t> rmsQueueHighWater_{0};
+  std::atomic<std::uint32_t> gpsQueued_{0};
+  std::atomic<std::uint32_t> gpsWritten_{0};
+  std::atomic<std::uint32_t> gpsDropped_{0};
+  std::atomic<std::uint32_t> gpsQueueHighWater_{0};
   std::atomic<bool> rmsHealthy_{false};
   // Eight remote Blades plus the Computer's local IMU are independent sources.
   std::array<CheckpointProgress, 9> checkpointProgress_{};

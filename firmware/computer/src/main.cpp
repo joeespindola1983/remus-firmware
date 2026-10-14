@@ -3,6 +3,7 @@
 #include "ComputerAcquisitionService.hpp"
 #include "ComputerRadioService.hpp"
 #include "ComputerRuntime.hpp"
+#include "GpsService.hpp"
 #include "SdDiagnosticLogger.hpp"
 #include "esp_app_desc.h"
 #include "esp_log.h"
@@ -35,6 +36,7 @@ extern "C" void app_main(void) {
   static remus::computer::ComputerRuntime runtime;
   static remus::computer::SdDiagnosticLogger sdLogger;
   static remus::computer::ComputerRadioService radioService(&sdLogger, recordingId);
+  static remus::computer::GpsService gpsService(sdLogger);
   // Independent Computer role profile. The owner-confirmed remus-sensor wiring
   // uses the same GPIO numbers as the Blade, on a physically separate I2C bus.
   static constexpr remus::platform::esp32::Mpu6050Config computerImu{
@@ -136,13 +138,33 @@ extern "C" void app_main(void) {
                      readyDetails);
   }
 
+  const remus::Status gpsStatus =
+      sdLogger.isRecording()
+          ? gpsService.start(radioService.computerId(), radioService.bootId())
+          : remus::Status::failure(remus::Error::StorageUnavailable);
+  if (!gpsStatus.ok()) {
+    ESP_LOGW(kLogTag, "GPS: UNAVAILABLE error=%u detail=%lu; IMU capture remains operational",
+             static_cast<unsigned>(gpsStatus.error),
+             static_cast<unsigned long>(gpsStatus.detail));
+    if (sdLogger.isReady()) {
+      static char failureDetails[96]{};
+      std::snprintf(failureDetails, sizeof(failureDetails), "error=%u detail=%lu",
+                    static_cast<unsigned>(gpsStatus.error),
+                    static_cast<unsigned long>(gpsStatus.detail));
+      sdLogger.enqueue(remus::computer::DiagnosticLogLevel::Warning,
+                       "gps_start_failed", failureDetails);
+    }
+  }
+
   remus::diagnostics::OperationalProblemCounters previousProblems{};
+  std::uint32_t previousGpsDropped = 0;
   for (;;) {
     const remus::diagnostics::HealthSnapshot health = runtime.healthSnapshot();
     const remus::acquisition::SamplingMetrics imu = acquisitionService.metrics();
     const remus::computer::SdDiagnosticLoggerStats sdLogStats = sdLogger.stats();
     const remus::computer::ComputerRecoveryStats recovery = radioService.recoveryStats();
-    static char healthDetails[512]{};
+    const remus::computer::GpsServiceStats gps = gpsService.stats();
+    static char healthDetails[768]{};
     std::snprintf(healthDetails, sizeof(healthDetails),
                   "uptime_ms=%llu runtime_starts=%lu queue_overflows=%lu pool_exhaustions=%lu "
                   "invalid_handle_releases=%lu free_heap=%lu minimum_free_heap=%lu "
@@ -150,7 +172,10 @@ extern "C" void app_main(void) {
                   "sd_log_rotations=%lu imu_attempts=%llu imu_valid=%llu imu_errors=%llu "
                   "imu_missed=%llu imu_max_jitter_us=%llu local_batches=%llu "
                   "rms_queued=%lu rms_written=%lu rms_dropped=%lu rms_write_failures=%lu "
-                  "rms_checkpoints=%lu rms_bytes=%llu sd_log_queue_hwm=%lu rms_queue_hwm=%lu",
+                  "rms_checkpoints=%lu rms_bytes=%llu sd_log_queue_hwm=%lu rms_queue_hwm=%lu "
+                  "gps_bytes=%llu gps_records_queued=%lu gps_records_written=%lu "
+                  "gps_records_dropped=%lu gps_coherent_epochs=%lu gps_checksum_failures=%lu "
+                  "gps_fix_transitions=%lu gps_queue_hwm=%lu",
                   static_cast<unsigned long long>(esp_timer_get_time() / 1000),
                   static_cast<unsigned long>(health.runtimeStarts),
                   static_cast<unsigned long>(health.queueOverflows),
@@ -175,7 +200,15 @@ extern "C" void app_main(void) {
                   static_cast<unsigned long>(sdLogStats.rmsCheckpoints),
                   static_cast<unsigned long long>(sdLogStats.rmsBytes),
                   static_cast<unsigned long>(sdLogStats.diagnosticQueueHighWater),
-                  static_cast<unsigned long>(sdLogStats.rmsQueueHighWater));
+                  static_cast<unsigned long>(sdLogStats.rmsQueueHighWater),
+                  static_cast<unsigned long long>(gps.bytes),
+                  static_cast<unsigned long>(gps.recordsQueued),
+                  static_cast<unsigned long>(sdLogStats.gpsWritten),
+                  static_cast<unsigned long>(gps.recordsDropped + sdLogStats.gpsDropped),
+                  static_cast<unsigned long>(gps.coherentEpochs),
+                  static_cast<unsigned long>(gps.checksumFailures),
+                  static_cast<unsigned long>(gps.fixTransitions),
+                  static_cast<unsigned long>(sdLogStats.gpsQueueHighWater));
     if (sdLogger.isReady() &&
         !sdLogger.enqueue(remus::computer::DiagnosticLogLevel::Info, "health", healthDetails)) {
       ESP_LOGW(kLogTag, "SD diagnostic log queue full; entry dropped");
@@ -213,6 +246,10 @@ extern "C" void app_main(void) {
             sizeof(operationalProblems)))
       ESP_LOGW(kLogTag, "%s", operationalProblems);
     previousProblems = currentProblems;
+    const std::uint32_t gpsDropped = gps.recordsDropped + sdLogStats.gpsDropped;
+    if (gpsDropped > previousGpsDropped)
+      ESP_LOGW(kLogTag, "GPS: record_drop total=%lu", static_cast<unsigned long>(gpsDropped));
+    previousGpsDropped = gpsDropped;
     vTaskDelay(kHealthLogInterval);
   }
 }

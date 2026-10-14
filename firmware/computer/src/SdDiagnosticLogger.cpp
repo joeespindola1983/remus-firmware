@@ -119,7 +119,9 @@ Status SdDiagnosticLogger::start() noexcept {
                                         diagnosticQueueStorage_, &diagnosticQueueBuffer_);
   rmsQueue_ = xQueueCreateStatic(kRmsQueueCapacity, sizeof(RmsEntry), rmsQueueStorage_,
                                  &rmsQueueBuffer_);
-  if (diagnosticQueue_ == nullptr || rmsQueue_ == nullptr) {
+  gpsQueue_ = xQueueCreateStatic(kGpsQueueCapacity, sizeof(GpsEntry), gpsQueueStorage_,
+                                 &gpsQueueBuffer_);
+  if (diagnosticQueue_ == nullptr || rmsQueue_ == nullptr || gpsQueue_ == nullptr) {
     log_.close();
     esp_vfs_fat_sdcard_unmount(kMountPoint, card_);
     spi_bus_free(spiHost);
@@ -135,6 +137,7 @@ Status SdDiagnosticLogger::start() noexcept {
     card_ = nullptr;
     diagnosticQueue_ = nullptr;
     rmsQueue_ = nullptr;
+    gpsQueue_ = nullptr;
     return Status::failure(Error::StorageUnavailable);
   }
 
@@ -150,6 +153,7 @@ Status SdDiagnosticLogger::start() noexcept {
     card_ = nullptr;
     diagnosticQueue_ = nullptr;
     rmsQueue_ = nullptr;
+    gpsQueue_ = nullptr;
     filesystemMutex_ = nullptr;
     return Status::failure(Error::StorageUnavailable);
   }
@@ -309,11 +313,32 @@ bool SdDiagnosticLogger::enqueueGap(std::uint64_t originId,
   return true;
 }
 
+bool SdDiagnosticLogger::enqueueGpsFix(std::uint64_t originId,
+                                       std::uint32_t originBootId,
+                                       std::uint32_t sequence,
+                                       const storage::GpsFixPayload& fix) noexcept {
+  if (!rmsHealthy_.load() || gpsQueue_ == nullptr || originId == 0 || originBootId == 0) {
+    ++gpsDropped_;
+    return false;
+  }
+  const GpsEntry entry{originId, originBootId, sequence, fix};
+  if (xQueueSend(gpsQueue_, &entry, 0) != pdTRUE) {
+    ++gpsDropped_;
+    return false;
+  }
+  ++gpsQueued_;
+  updateHighWater(gpsQueueHighWater_, uxQueueMessagesWaiting(gpsQueue_));
+  if (task_ != nullptr) xTaskNotifyGive(task_);
+  return true;
+}
+
 SdDiagnosticLoggerStats SdDiagnosticLogger::stats() const noexcept {
   return {queued_.load(), dropped_.load(), writeFailures_.load(), rotations_.load(),
           rmsQueued_.load(), rmsWritten_.load(), rmsDropped_.load(),
           rmsWriteFailures_.load(), rmsCheckpoints_.load(), rmsBytes_.load(),
-          diagnosticQueueHighWater_.load(), rmsQueueHighWater_.load()};
+          diagnosticQueueHighWater_.load(), rmsQueueHighWater_.load(),
+          gpsQueued_.load(), gpsWritten_.load(), gpsDropped_.load(),
+          gpsQueueHighWater_.load()};
 }
 
 bool SdDiagnosticLogger::checkpointedThrough(std::uint64_t originId,
@@ -375,6 +400,7 @@ void SdDiagnosticLogger::taskEntry(void* context) noexcept {
 void SdDiagnosticLogger::run() noexcept {
   DiagnosticEntry diagnostic{};
   RmsEntry entry{};
+  GpsEntry gpsEntry{};
   bool diagnosticDirty = false;
   std::int64_t diagnosticLastSyncUs = esp_timer_get_time();
   for (;;) {
@@ -472,6 +498,39 @@ void SdDiagnosticLogger::run() noexcept {
       markBatchWritten(entry.imu.originId, entry.imu.originBootId, entry.imu.batchSeq);
     }
 
+    // GPS has its own bounded queue and receives at most one write opportunity
+    // after each IMU burst. It can be dropped under pressure, but can never
+    // occupy the IMU/recovery queue or delay its admission path.
+    if (xQueueReceive(gpsQueue_, &gpsEntry, 0) == pdTRUE) {
+      std::uint8_t payload[storage::kGpsFixPayloadBytes]{};
+      std::uint8_t encoded[storage::kRms1MaximumRecordBytes]{};
+      std::size_t encodedSize = 0;
+      if (!storage::encodeGpsFixPayload(gpsEntry.fix, payload, sizeof(payload)).ok()) {
+        ++gpsDropped_;
+      } else {
+        const storage::Rms1Record record{
+            storage::Rms1RecordType::GpsFix,
+            ++rmsOrdinal_,
+            gpsEntry.fix.pcMonotonicUs,
+            gpsEntry.originId,
+            gpsEntry.originBootId,
+            gpsEntry.sequence,
+            payload,
+            static_cast<std::uint32_t>(sizeof(payload))};
+        if (!rmsHealthy_.load() || rmsFile_ == nullptr ||
+            !storage::encodeRecord(record, encoded, sizeof(encoded), encodedSize).ok() ||
+            std::fwrite(encoded, 1, encodedSize, rmsFile_) != encodedSize) {
+          ++rmsWriteFailures_;
+          rmsHealthy_.store(false);
+        } else {
+          ++gpsWritten_;
+          ++rmsWritten_;
+          rmsBytes_.fetch_add(encodedSize);
+          rmsBytesSinceSync_ += encodedSize;
+        }
+      }
+    }
+
     if (xQueueReceive(diagnosticQueue_, &diagnostic, 0) == pdTRUE) {
         Status writeStatus = Status::failure(Error::Busy);
         if (filesystemMutex_ != nullptr &&
@@ -510,7 +569,7 @@ void SdDiagnosticLogger::run() noexcept {
     }
 
     if (!processedRms && uxQueueMessagesWaiting(diagnosticQueue_) == 0 &&
-        uxQueueMessagesWaiting(rmsQueue_) == 0) {
+        uxQueueMessagesWaiting(rmsQueue_) == 0 && uxQueueMessagesWaiting(gpsQueue_) == 0) {
       ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
     }
   }

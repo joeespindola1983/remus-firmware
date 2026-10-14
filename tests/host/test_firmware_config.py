@@ -30,6 +30,24 @@ def main() -> int:
             if "factory,app,factory,0x10000,0x300000" not in text.replace(" ", ""):
                 failures.append(f"{partitions}: 3 MiB application partition missing")
 
+    blade_cmake = (root / "firmware" / "blade" / "CMakeLists.txt").read_text(
+        encoding="utf-8"
+    ) + (root / "firmware" / "blade" / "src" / "CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+    for forbidden in ("remus_gps", "remus_platform_esp32_gps"):
+        if forbidden in blade_cmake:
+            failures.append(f"firmware/blade: must not depend on {forbidden}")
+
+    computer_cmake = (root / "firmware" / "computer" / "CMakeLists.txt").read_text(
+        encoding="utf-8"
+    ) + (root / "firmware" / "computer" / "src" / "CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+    for required in ("remus_gps", "remus_platform_esp32_gps"):
+        if required not in computer_cmake:
+            failures.append(f"firmware/computer: missing {required}")
+
     for failure in failures:
         print(f"FAIL: {failure}", file=sys.stderr)
     return 1 if failures else 0
