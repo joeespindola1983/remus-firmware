@@ -1,4 +1,4 @@
-# M0 architecture
+# Firmware architecture through M2
 
 The Remus firmware produces two independent images from one repository:
 
@@ -7,6 +7,7 @@ remus_core <- remus_hal <- firmware/blade
      ^            ^      <- firmware/computer
      |
 remus_diagnostics
+remus_link -> remus_hal::{ICrypto,IRadio}
 ```
 
 M0 establishes the product contracts. `remus_core`, `remus_hal`, and
@@ -54,9 +55,22 @@ Log records contain monotonic time, severity, event name, and bounded details.
 Secrets, provisioning keys, stable identities, and raw evidence do not belong
 in this channel.
 
-## Current boundary
+## RemusRF v1 codec boundary
 
-There is no protocol, radio, cryptography implementation, acquisition, session
-storage, navigation, replay, session control, or time synchronization in M0.
-`ICrypto` is a dependency-injection contract; `FakeCrypto` exists only for
-deterministic host tests and is not secure or linked into firmware.
+`remus_link` owns the host-testable binary envelope, connection-message codecs,
+CRC32C validation and key derivation policy. Cryptographic operations remain
+behind `ICrypto`; the ESP32 adapter uses mbedTLS. The codec has no ESP-NOW,
+FreeRTOS, state-machine or storage dependency. M1 deliberately does not start
+the radio or claim a physical Blade connection.
+
+## M2 radio boundary
+
+ESP-NOW callbacks only copy bounded events into a fixed queue. Target-owned radio
+services parse and authenticate frames, while portable state machines own link
+transitions. `TxScheduler` permits one SDK send in flight, `SourceRegistry`
+bounds the Computer to eight sources, and `RadioSupervisor` turns isolated and
+persistent failures into explicit policy actions. MAC delivery never marks a
+Blade bound; only a valid pair-authenticated `BIND_ACK` can do that.
+
+There is still no acquisition, session storage, navigation, replay, session
+control, or time synchronization. `FakeCrypto` remains host-test-only.

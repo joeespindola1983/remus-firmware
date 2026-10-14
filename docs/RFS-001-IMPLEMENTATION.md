@@ -1145,7 +1145,7 @@ Tamanho máximo real para 10 amostras = `48 + (16+10×16) + 4 + 16 = 244 bytes`,
 | `ACK_WINDOW` | `bladeId:u64, bladeBootId:u32, acceptedThrough:u32, receivedBitmap:u32, checkpointedThrough:u32, receiverHealth:u16, reserved:u16` (28 B) | duas marcas de progresso + bitmap de 32 |
 | `REPLAY_REQUEST` | `bladeId:u64, bladeBootId:u32, firstSeq:u32, count:u8, reason:u8, reserved:u16` (20 B) | pedidos seletivos (count 1–16) |
 | `GAP_NOTICE` | `bladeId:u64, bladeBootId:u32, fromSeq:u32, throughSeq:u32, firstSampleIndex:u64, reason:u16, reserved:u16` (32 B) | perda irreversível explícita |
-| `SOURCE_MANIFEST` | `bladeId:u64, bladeBootId:u32, imuModel:u16, accelFsG:u8, reserved1:u8, gyroFsDps:u16, dlpfHz:u16, targetRateHz:u16, mounting:u8, reserved2:u8, hardwareRevision:u16, firmwareMajor:u8, firmwareMinor:u8, firmwarePatch:u16, lsbPerG:u16, lsbPerDpsX10:u16` (32 B) | manifesto físico de calibração |
+| `SOURCE_MANIFEST` | `bladeId:u64, bladeBootId:u32, imuModel:u16, accelFsG:u8, reserved1:u8, gyroFsDps:u16, dlpfHz:u16, targetRateHz:u16, mounting:u8, reserved2:u8, hardwareRevision:u16, firmwareMajor:u8, firmwareMinor:u8, firmwarePatch:u16, lsbPerG:u16, lsbPerDpsX10:u16` (34 B) | manifesto físico de calibração |
 | `HEALTH` | `role:u8, state:u8, reserved:u16, rxDropped:u32, txFailed:u32, queueHwm:u16, freeHeapKb:u16, lastError:u32` (20 B) | diagnóstico periódico |
 | `ERROR` | `referenceMsgSeq:u32, errorCode:u16, stage:u16` (8 B) | código de erro técnico |
 
@@ -1440,7 +1440,7 @@ Todos os campos são little-endian. O `RecordHeader` de 48 bytes já identifica 
 | `HEALTH` | `pcMonoUs:u64, role:u8, state:u8, reserved:u16, rxDrops:u32, txFailures:u32, queueHwm:u16, replayDrops:u16, freeHeapBytes:u32, storageLagMs:u32` = **32 B** | Métricas de integridade |
 | `UTC_ANCHOR` | `pcMonoUs:u64, utcMs:i64, uncertaintyMs:u32, source:u8, flags:u8, reserved:u16` = **24 B** | Âncora temporal externa |
 | `FINAL_SUMMARY` | `endPcMonoUs:u64, endUtcMs:i64, reason:u16, flags:u16, recordCount:u64, totalBatches:u32, totalGaps:u32, sdFailures:u32, precedingCheckpointOrdinal:u64` = **48 B** | Footer auditável de integridade |
-| `SOURCE_MANIFEST` | `bladeId:u64, bladeBootId:u32, imuModel:u16, accelFsG:u8, reserved1:u8, gyroFsDps:u16, dlpfHz:u16, targetRateHz:u16, mounting:u8, reserved2:u8, hardwareRevision:u16, firmwareMajor:u8, firmwareMinor:u8, firmwarePatch:u16, lsbPerG:u16, lsbPerDpsX10:u16, reserved3:u32` = **36 B** | Contrato de conversão para $m/s^2$ e $rad/s$ |
+| `SOURCE_MANIFEST` | `bladeId:u64, bladeBootId:u32, imuModel:u16, accelFsG:u8, reserved1:u8, gyroFsDps:u16, dlpfHz:u16, targetRateHz:u16, mounting:u8, reserved2:u8, hardwareRevision:u16, firmwareMajor:u8, firmwareMinor:u8, firmwarePatch:u16, lsbPerG:u16, lsbPerDpsX10:u16, reserved3:u32` = **38 B** | Contrato de conversão para $m/s^2$ e $rad/s$ |
 
 `SOURCE_MANIFEST` é gravado pelo Computer imediatamente após admitir o participante e receber o manifesto no handshake, garantindo que qualquer software leitor do `.rms` (como ferramentas Python, pipelines de análise ou o futuro `remus-app`) saiba exatamente a sensibilidade e ranges físicos do sensor sem tabelas hardcoded.
 

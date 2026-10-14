@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "remus/core/Status.hpp"
+
 namespace remus {
 
 constexpr std::uint16_t kNominalSamplingRateHertz = 200;
@@ -27,5 +29,9 @@ struct CapacityConfig {
   std::size_t receivePoolCapacity{0};
   std::size_t receiveQueueCapacity{0};
 };
+
+// Validates the fixed radio channel, bounded queues, and encrypted-peer
+// capacity before any radio resource is started.
+Status validateConnectionConfig(const RadioConfig& radio, const CapacityConfig& capacity) noexcept;
 
 }  // namespace remus
