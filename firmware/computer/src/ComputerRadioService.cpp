@@ -7,6 +7,7 @@
 #include "esp_random.h"
 #include "esp_timer.h"
 #include "nvs_flash.h"
+#include "remus/diagnostics/OperationalSerial.hpp"
 #include "remus/link/MessageCodec.hpp"
 
 namespace remus::computer {
@@ -371,6 +372,15 @@ void ComputerRadioService::handleDataBatch(link::SourceEntry& source, const Even
       sink->ack.acceptedCount() - sink->acceptedAtLastAck >= kAckBatchInterval)
     sendAckAndReplay(source, *sink, true, event.meta.localRxUs);
   if (sink->batches % 20 == 0) {
+    if (batch.sampleCount > 0) {
+      const auto& sample = batch.samples[batch.sampleCount - 1];
+      const diagnostics::ImuRawPreview preview{sample.ax, sample.ay, sample.az, sample.gx,
+                                               sample.gy, sample.gz, sample.flags};
+      char line[160]{};
+      if (diagnostics::formatImuRawPreview("BLADE", source.bladeBootId, preview, line,
+                                           sizeof(line)))
+        ESP_LOGI(kTag, "%s", line);
+    }
     char details[224]{};
     std::snprintf(details, sizeof(details),
                   "blade_id=%llu boot=%lu batches=%llu samples=%llu gaps=%lu rssi=%d "

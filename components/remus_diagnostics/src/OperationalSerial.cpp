@@ -22,6 +22,26 @@ bool appendIncrease(char* output, std::size_t capacity, std::size_t& used,
 
 }  // namespace
 
+bool formatImuRawPreview(const char* source, std::uint32_t bootId,
+                         const ImuRawPreview& sample, char* output,
+                         std::size_t outputCapacity) noexcept {
+  if (source == nullptr || source[0] == '\0' || output == nullptr || outputCapacity == 0)
+    return false;
+  const int written = bootId == 0
+                          ? std::snprintf(output, outputCapacity,
+                                          "IMU %s raw ax=%d ay=%d az=%d gx=%d gy=%d gz=%d "
+                                          "flags=0x%04x",
+                                          source, sample.ax, sample.ay, sample.az, sample.gx,
+                                          sample.gy, sample.gz, sample.flags)
+                          : std::snprintf(output, outputCapacity,
+                                          "IMU %s boot=%08lx raw ax=%d ay=%d az=%d gx=%d gy=%d "
+                                          "gz=%d flags=0x%04x",
+                                          source, static_cast<unsigned long>(bootId), sample.ax,
+                                          sample.ay, sample.az, sample.gx, sample.gy, sample.gz,
+                                          sample.flags);
+  return written > 0 && static_cast<std::size_t>(written) < outputCapacity;
+}
+
 bool formatNewOperationalProblems(const OperationalProblemCounters& previous,
                                   const OperationalProblemCounters& current,
                                   char* output, std::size_t outputCapacity) noexcept {

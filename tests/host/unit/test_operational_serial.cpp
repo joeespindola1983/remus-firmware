@@ -76,12 +76,39 @@ void testAllFaultClassesCanBeReported() {
   EXPECT(std::strstr(line, "unrecoverable_gaps=+12") != nullptr);
 }
 
+void testImuPreviewIsOneCompactRawSampleLine() {
+  const remus::diagnostics::ImuRawPreview sample{101, -202, 303, -404, 505, -606, 3};
+  char localLine[160]{};
+  char bladeLine[160]{};
+
+  EXPECT(remus::diagnostics::formatImuRawPreview("PC", 0, sample, localLine,
+                                                 sizeof(localLine)));
+  EXPECT(std::strcmp(localLine,
+                     "IMU PC raw ax=101 ay=-202 az=303 gx=-404 gy=505 gz=-606 flags=0x0003") ==
+         0);
+  EXPECT(remus::diagnostics::formatImuRawPreview("BLADE", 0x12ab34cd, sample, bladeLine,
+                                                 sizeof(bladeLine)));
+  EXPECT(std::strcmp(bladeLine,
+                     "IMU BLADE boot=12ab34cd raw ax=101 ay=-202 az=303 gx=-404 gy=505 "
+                     "gz=-606 flags=0x0003") == 0);
+}
+
+void testImuPreviewCadenceIsOncePerSecondAtTwentyBatches() {
+  EXPECT(!remus::diagnostics::shouldEmitImuPreview(0));
+  EXPECT(!remus::diagnostics::shouldEmitImuPreview(19));
+  EXPECT(remus::diagnostics::shouldEmitImuPreview(20));
+  EXPECT(!remus::diagnostics::shouldEmitImuPreview(21));
+  EXPECT(remus::diagnostics::shouldEmitImuPreview(40));
+}
+
 }  // namespace
 
 int main() {
   testHealthySnapshotsStaySilent();
   testOnlyNewProblemsArePrinted();
   testAllFaultClassesCanBeReported();
+  testImuPreviewIsOneCompactRawSampleLine();
+  testImuPreviewCadenceIsOncePerSecondAtTwentyBatches();
   if (failures == 0) std::cout << "operational serial tests passed\n";
   return failures == 0 ? 0 : 1;
 }
