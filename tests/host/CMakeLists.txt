@@ -28,6 +28,7 @@ target_link_libraries(remus_hal INTERFACE remus_core)
 add_library(remus_diagnostics STATIC
   "${REPO_ROOT}/components/remus_diagnostics/src/EventLog.cpp"
   "${REPO_ROOT}/components/remus_diagnostics/src/HealthCounters.cpp"
+  "${REPO_ROOT}/components/remus_diagnostics/src/OperationalSerial.cpp"
   "${REPO_ROOT}/components/remus_diagnostics/src/RotatingTextLog.cpp"
 )
 target_include_directories(remus_diagnostics PUBLIC
@@ -82,6 +83,11 @@ add_executable(test_rotating_text_log unit/test_rotating_text_log.cpp)
 target_link_libraries(test_rotating_text_log PRIVATE remus_diagnostics)
 target_compile_options(test_rotating_text_log PRIVATE -Wall -Wextra -Wpedantic -Werror)
 add_test(NAME rotating_text_log COMMAND test_rotating_text_log)
+
+add_executable(test_operational_serial unit/test_operational_serial.cpp)
+target_link_libraries(test_operational_serial PRIVATE remus_diagnostics)
+target_compile_options(test_operational_serial PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_test(NAME operational_serial COMMAND test_operational_serial)
 
 add_executable(test_remus_rf_v1 unit/test_remus_rf_v1.cpp)
 target_include_directories(test_remus_rf_v1 PRIVATE fakes)

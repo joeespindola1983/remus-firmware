@@ -35,12 +35,7 @@ Status ComputerAcquisitionService::start(RecordingId recordingId) noexcept {
     return Status::failure(Error::QueueFull);
   task_ = xTaskCreateStatic(taskEntry, "computer_imu", 4096, this, 12, taskStack_, &taskBuffer_);
   if (task_ == nullptr) return Status::failure(Error::NotReady);
-  ESP_LOGW(kTag,
-           "ready source=computer_local_imu rate_hz=200 accel_fs_g=8 gyro_fs_dps=1000 "
-           "address=0x%02x identity=0x%02x "
-           "mode=software_timer drdy_gpio=unassigned fifo_supported=true",
-           static_cast<unsigned>(imu_.detectedAddress()),
-           static_cast<unsigned>(imu_.detectedIdentity()));
+  ESP_LOGI(kTag, "IMU: ready");
   return Status::success();
 }
 
@@ -85,12 +80,6 @@ Status ComputerAcquisitionService::onBatchReady(
     return Status::failure(Error::QueueFull);
   ++batchCount_;
   sampleCount_ += batch.count;
-  if (batchCount_ % 20 == 0) {
-    ESP_LOGI(kTag, "sink batches=%llu samples=%llu last_batch_seq=%lu",
-             static_cast<unsigned long long>(batchCount_),
-             static_cast<unsigned long long>(sampleCount_),
-             static_cast<unsigned long>(batch.batchSeq));
-  }
   return Status::success();
 }
 

@@ -35,6 +35,12 @@ const SourceEntry* SourceRegistry::find(BladeId id, DeviceBootId boot) const noe
     if (entry.active && entry.bladeId == id && entry.bladeBootId == boot) return &entry;
   return nullptr;
 }
+std::size_t SourceRegistry::boundCount() const noexcept {
+  std::size_t count = 0;
+  for (const auto& entry : entries_)
+    if (entry.active && entry.state.state() == ComputerPeerState::Bound) ++count;
+  return count;
+}
 SourceEntry* SourceRegistry::findByAddress(const MacAddress& address) noexcept {
   for (auto& entry : entries_)
     if (entry.active && entry.address == address) return &entry;

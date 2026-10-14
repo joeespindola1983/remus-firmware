@@ -11,6 +11,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "remus/diagnostics/OperationalSerial.hpp"
 
 namespace {
 constexpr char kLogTag[] = "remus_computer";
@@ -105,8 +106,7 @@ extern "C" void app_main(void) {
       radioService.setCaptureAllowed(true);
       acquisitionService.setStorageContext(&sdLogger, radioService.computerId(),
                                            radioService.bootId());
-      ESP_LOGI(kLogTag, "RMS1 recording started recording_id=%016llx",
-               static_cast<unsigned long long>(recordingId));
+      ESP_LOGI(kLogTag, "RMS1 recording: started");
     }
   }
 
@@ -136,6 +136,7 @@ extern "C" void app_main(void) {
                      readyDetails);
   }
 
+  remus::diagnostics::OperationalProblemCounters previousProblems{};
   for (;;) {
     const remus::diagnostics::HealthSnapshot health = runtime.healthSnapshot();
     const remus::acquisition::SamplingMetrics imu = acquisitionService.metrics();
@@ -175,7 +176,6 @@ extern "C" void app_main(void) {
                   static_cast<unsigned long long>(sdLogStats.rmsBytes),
                   static_cast<unsigned long>(sdLogStats.diagnosticQueueHighWater),
                   static_cast<unsigned long>(sdLogStats.rmsQueueHighWater));
-    ESP_LOGI(kLogTag, "health %s", healthDetails);
     if (sdLogger.isReady() &&
         !sdLogger.enqueue(remus::computer::DiagnosticLogLevel::Info, "health", healthDetails)) {
       ESP_LOGW(kLogTag, "SD diagnostic log queue full; entry dropped");
@@ -191,10 +191,28 @@ extern "C" void app_main(void) {
                   static_cast<unsigned long>(recovery.duplicateBatches),
                   static_cast<unsigned long>(recovery.outsideWindowBatches),
                   static_cast<unsigned long>(recovery.unrecoverableGaps));
-    ESP_LOGI(kLogTag, "recovery %s", recoveryDetails);
     if (sdLogger.isReady())
       sdLogger.enqueue(remus::computer::DiagnosticLogLevel::Info, "radio_recovery",
                        recoveryDetails);
+    const remus::diagnostics::OperationalProblemCounters currentProblems{
+        health.queueOverflows,
+        health.poolExhaustions,
+        health.invalidHandleReleases,
+        sdLogStats.dropped,
+        sdLogStats.writeFailures,
+        imu.readErrors,
+        imu.missedPeriods,
+        sdLogStats.rmsDropped,
+        sdLogStats.rmsWriteFailures,
+        recovery.duplicateBatches,
+        recovery.outsideWindowBatches,
+        recovery.unrecoverableGaps};
+    char operationalProblems[384]{};
+    if (remus::diagnostics::formatNewOperationalProblems(
+            previousProblems, currentProblems, operationalProblems,
+            sizeof(operationalProblems)))
+      ESP_LOGW(kLogTag, "%s", operationalProblems);
+    previousProblems = currentProblems;
     vTaskDelay(kHealthLogInterval);
   }
 }

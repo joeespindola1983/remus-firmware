@@ -99,6 +99,21 @@ void testCandidateExpiryIsAbsolute() {
   EXPECT(registry.size() == 0);
 }
 
+void testRegistryCountsOnlyFullyBoundBlades() {
+  remus::link::SourceRegistry registry;
+  EXPECT(registry.admit(10, 20, mac(1), 100).ok());
+  EXPECT(registry.admit(11, 21, mac(2), 100).ok());
+  EXPECT(registry.boundCount() == 0);
+
+  auto* first = registry.find(10, 20);
+  EXPECT(first != nullptr);
+  EXPECT(first->state.onPeerRegistered().ok());
+  EXPECT(first->state.onBindSent(33).ok());
+  EXPECT(registry.boundCount() == 0);
+  EXPECT(first->state.onBindAck(33).ok());
+  EXPECT(registry.boundCount() == 1);
+}
+
 void testTxSchedulerKeepsOneFrameInFlight() {
   FakeRadio radio;
   remus::link::TxScheduler scheduler(radio);
@@ -158,6 +173,7 @@ int main() {
   testValidBindIsAcknowledgedWhenCaptureCannotStart();
   testRegistryBoundsAndIdentityCollision();
   testCandidateExpiryIsAbsolute();
+  testRegistryCountsOnlyFullyBoundBlades();
   testTxSchedulerKeepsOneFrameInFlight();
   testTxSchedulerRequiresDriverRecoveryAfterMissingCallback();
   testRadioSupervisorBacksOffPersistentFailure();

@@ -35,6 +35,7 @@ class SourceRegistry {
                                MacAddress* removed = nullptr,
                                std::size_t removedCapacity = 0) noexcept;
   std::size_t size() const noexcept { return size_; }
+  std::size_t boundCount() const noexcept;
   static constexpr std::size_t capacity() noexcept { return kMaximumParticipants; }
 
  private:

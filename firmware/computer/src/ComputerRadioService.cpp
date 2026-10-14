@@ -60,7 +60,7 @@ Status ComputerRadioService::start() noexcept {
     radio_.stop();
     return Status::failure(Error::NotReady);
   }
-  ESP_LOGI(kTag, "state=Discovering channel=1 network=%lu", static_cast<unsigned long>(networkId_));
+  ESP_LOGI(kTag, "BLADE: waiting for connection");
   log(DiagnosticLogLevel::Info, "radio_discovering", "channel=1");
   return Status::success();
 }
@@ -147,7 +147,10 @@ void ComputerRadioService::run() noexcept {
         registry_.expireCandidates(static_cast<NativeTimestampUs>(now), kCandidateLifetimeUs,
                                    removed, link::SourceRegistry::capacity());
     for (std::size_t index = 0; index < expired; ++index) radio_.removePeer(removed[index]);
-    if (expired) log(DiagnosticLogLevel::Warning, "blade_candidate_expired", "bind_timeout=true");
+    if (expired) {
+      ESP_LOGW(kTag, "BLADE: connection failed (BIND timeout)");
+      log(DiagnosticLogLevel::Warning, "blade_candidate_expired", "bind_timeout=true");
+    }
     const Status txStatus = tx_.poll(static_cast<NativeTimestampUs>(now));
     if (txStatus.error == Error::Timeout) {
       ESP_LOGE(kTag, "tx callback timeout; restarting ESP-NOW before next frame");
@@ -221,9 +224,8 @@ void ComputerRadioService::handleHello(const Event& event,
     return;
   source->bindEpoch = esp_random();
   if (!source->bindEpoch) source->bindEpoch = 1;
-  ESP_LOGI(kTag, "blade candidate boot=%lu rssi=%d sources=%u",
-           static_cast<unsigned long>(hello.bladeBootId), event.meta.rssiDbm,
-           static_cast<unsigned>(registry_.size()));
+  ESP_LOGI(kTag, "BLADE: detected boot=%08lx rssi=%d dBm",
+           static_cast<unsigned long>(hello.bladeBootId), event.meta.rssiDbm);
   log(DiagnosticLogLevel::Info, "blade_candidate", "peer_authenticated=true");
   sendBind(*source);
 }
@@ -303,8 +305,9 @@ void ComputerRadioService::handleBindAck(link::SourceEntry& source,
       ack.pcBootId != bootId_ || ack.sessionId != recordingId_ || ack.resultCode != 0 ||
       !source.state.onBindAck(ack.bindEpoch).ok())
     return;
-  ESP_LOGI(kTag, "blade state=Bound boot=%lu sources=%u",
-           static_cast<unsigned long>(ack.bladeBootId), static_cast<unsigned>(registry_.size()));
+  ESP_LOGI(kTag, "BLADE: CONNECTED boot=%08lx connected=%u",
+           static_cast<unsigned long>(ack.bladeBootId),
+           static_cast<unsigned>(registry_.boundCount()));
   log(DiagnosticLogLevel::Info, "blade_bound", "application_ack=true");
 }
 
@@ -380,7 +383,6 @@ void ComputerRadioService::handleDataBatch(link::SourceEntry& source, const Even
                   static_cast<unsigned long>(sink->duplicates),
                   static_cast<unsigned long>(sink->outsideWindow),
                   static_cast<unsigned long>(batch.batchSeq));
-    ESP_LOGI(kTag, "DATA sink %s", details);
     log(DiagnosticLogLevel::Info, "data_sink", details);
   }
 }
