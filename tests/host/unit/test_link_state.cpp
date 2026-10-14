@@ -99,6 +99,40 @@ void testCandidateExpiryIsAbsolute() {
   EXPECT(registry.size() == 0);
 }
 
+void testRegistryReplacesSameBladeAfterReboot() {
+  remus::link::SourceRegistry registry;
+  EXPECT(registry.admit(10, 20, mac(1), 100).ok());
+  auto* original = registry.find(10, 20);
+  EXPECT(original != nullptr);
+  EXPECT(original->state.onPeerRegistered().ok());
+  EXPECT(original->state.onBindSent(33).ok());
+  EXPECT(original->state.onBindAck(33).ok());
+  EXPECT(registry.boundCount() == 1);
+
+  EXPECT(registry.admit(10, 21, mac(1), 500).ok());
+  EXPECT(registry.size() == 1);
+  EXPECT(registry.find(10, 20) == nullptr);
+  auto* restarted = registry.find(10, 21);
+  EXPECT(restarted != nullptr);
+  EXPECT(restarted->state.state() == remus::link::ComputerPeerState::Candidate);
+  EXPECT(registry.boundCount() == 0);
+
+  EXPECT(registry.admit(10, 22, mac(2), 600).error == remus::Error::AuthFailed);
+  EXPECT(registry.admit(11, 22, mac(1), 600).error == remus::Error::AuthFailed);
+}
+
+void testRegistryReportsOnlyRecentlySeenBoundBladesAsLive() {
+  remus::link::SourceRegistry registry;
+  EXPECT(registry.admit(10, 20, mac(1), 100).ok());
+  auto* source = registry.find(10, 20);
+  EXPECT(source != nullptr);
+  EXPECT(source->state.onPeerRegistered().ok());
+  EXPECT(source->state.onBindSent(33).ok());
+  EXPECT(source->state.onBindAck(33).ok());
+  EXPECT(registry.liveBoundCount(1099, 1000) == 1);
+  EXPECT(registry.liveBoundCount(1101, 1000) == 0);
+}
+
 void testRegistryCountsOnlyFullyBoundBlades() {
   remus::link::SourceRegistry registry;
   EXPECT(registry.admit(10, 20, mac(1), 100).ok());
@@ -173,6 +207,8 @@ int main() {
   testValidBindIsAcknowledgedWhenCaptureCannotStart();
   testRegistryBoundsAndIdentityCollision();
   testCandidateExpiryIsAbsolute();
+  testRegistryReplacesSameBladeAfterReboot();
+  testRegistryReportsOnlyRecentlySeenBoundBladesAsLive();
   testRegistryCountsOnlyFullyBoundBlades();
   testTxSchedulerKeepsOneFrameInFlight();
   testTxSchedulerRequiresDriverRecoveryAfterMissingCallback();

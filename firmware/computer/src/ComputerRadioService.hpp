@@ -105,6 +105,7 @@ class ComputerRadioService final : public hal::IRadioEvents {
   std::array<std::uint8_t, 32> groupKey_{};
   std::uint32_t beaconSeq_{0};
   std::uint32_t messageSeq_{0};
+  NativeTimestampUs lastRejectedHelloUs_{0};
   QueueHandle_t queue_{nullptr};
   StaticQueue_t queueBuffer_{};
   std::uint8_t queueStorage_[kQueueCapacity * sizeof(Event)]{};

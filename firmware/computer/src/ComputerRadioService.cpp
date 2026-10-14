@@ -16,6 +16,8 @@ constexpr char kTag[] = "computer_radio";
 constexpr MacAddress kBroadcast{{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}};
 constexpr std::int64_t kBeaconIntervalUs = 2000000;
 constexpr NativeTimestampUs kCandidateLifetimeUs = 10000000;
+constexpr NativeTimestampUs kSourceLivenessTimeoutUs = 5000000;
+constexpr NativeTimestampUs kRejectedHelloLogIntervalUs = 5000000;
 constexpr NativeTimestampUs kAckHeartbeatUs = 500000;
 constexpr NativeTimestampUs kReplayThrottleUs = 200000;
 constexpr std::uint32_t kAckBatchInterval = 10;
@@ -143,6 +145,25 @@ void ComputerRadioService::run() noexcept {
       auto* source = registry_.find(sink.bladeId, sink.bladeBootId);
       if (source != nullptr) sendAckAndReplay(*source, sink, true, now);
     }
+    for (std::size_t index = 0; index < link::SourceRegistry::capacity(); ++index) {
+      auto* source = registry_.entryAt(index);
+      if (source == nullptr || source->state.state() != link::ComputerPeerState::Bound ||
+          source->staleReported || source->lastSeenUs == 0 ||
+          static_cast<NativeTimestampUs>(now) < source->lastSeenUs ||
+          static_cast<NativeTimestampUs>(now) - source->lastSeenUs <= kSourceLivenessTimeoutUs)
+        continue;
+      source->staleReported = true;
+      const auto active = registry_.liveBoundCount(static_cast<NativeTimestampUs>(now),
+                                                   kSourceLivenessTimeoutUs);
+      char details[160]{};
+      std::snprintf(details, sizeof(details),
+                    "blade_id=%llu boot=%lu active=%u reason=data_timeout",
+                    static_cast<unsigned long long>(source->bladeId),
+                    static_cast<unsigned long>(source->bladeBootId),
+                    static_cast<unsigned>(active));
+      ESP_LOGW(kTag, "BLADE: LOST %s", details);
+      log(DiagnosticLogLevel::Warning, "blade_stale", details);
+    }
     MacAddress removed[link::SourceRegistry::capacity()]{};
     const auto expired =
         registry_.expireCandidates(static_cast<NativeTimestampUs>(now), kCandidateLifetimeUs,
@@ -207,11 +228,25 @@ void ComputerRadioService::handleHello(const Event& event,
       hello.bladeId != frame.header.senderId || hello.bladeBootId != frame.header.senderBootId ||
       hello.computerIdSeen != computerId_ || hello.pcBootIdSeen != bootId_ || !hello.peerReady)
     return;
+  const auto* previous = registry_.findByAddress(event.meta.source);
+  const bool restarted = previous != nullptr && previous->bladeId == hello.bladeId &&
+                         previous->bladeBootId != hello.bladeBootId;
+  const DeviceBootId previousBootId = restarted ? previous->bladeBootId : 0;
   Status status =
       registry_.admit(hello.bladeId, hello.bladeBootId, event.meta.source, event.meta.localRxUs);
   if (!status.ok()) {
-    ESP_LOGW(kTag, "HELLO rejected error=%u", static_cast<unsigned>(status.error));
-    log(DiagnosticLogLevel::Warning, "blade_rejected", "reason=registry_policy");
+    if (lastRejectedHelloUs_ == 0 || event.meta.localRxUs < lastRejectedHelloUs_ ||
+        event.meta.localRxUs - lastRejectedHelloUs_ >= kRejectedHelloLogIntervalUs) {
+      char details[160]{};
+      std::snprintf(details, sizeof(details),
+                    "blade_id=%llu boot=%lu error=%u reason=registry_policy",
+                    static_cast<unsigned long long>(hello.bladeId),
+                    static_cast<unsigned long>(hello.bladeBootId),
+                    static_cast<unsigned>(status.error));
+      ESP_LOGW(kTag, "BLADE: REJECTED %s", details);
+      log(DiagnosticLogLevel::Warning, "blade_rejected", details);
+      lastRejectedHelloUs_ = event.meta.localRxUs;
+    }
     return;
   }
   auto* source = registry_.find(hello.bladeId, hello.bladeBootId);
@@ -225,9 +260,22 @@ void ComputerRadioService::handleHello(const Event& event,
     return;
   source->bindEpoch = esp_random();
   if (!source->bindEpoch) source->bindEpoch = 1;
-  ESP_LOGI(kTag, "BLADE: detected boot=%08lx rssi=%d dBm",
-           static_cast<unsigned long>(hello.bladeBootId), event.meta.rssiDbm);
-  log(DiagnosticLogLevel::Info, "blade_candidate", "peer_authenticated=true");
+  char details[192]{};
+  if (restarted) {
+    std::snprintf(details, sizeof(details),
+                  "blade_id=%llu previous_boot=%08lx boot=%08lx rssi=%d",
+                  static_cast<unsigned long long>(hello.bladeId),
+                  static_cast<unsigned long>(previousBootId),
+                  static_cast<unsigned long>(hello.bladeBootId), event.meta.rssiDbm);
+    ESP_LOGW(kTag, "BLADE: RESTARTED %s", details);
+    log(DiagnosticLogLevel::Warning, "blade_restarted", details);
+  } else {
+    std::snprintf(details, sizeof(details), "blade_id=%llu boot=%08lx rssi=%d",
+                  static_cast<unsigned long long>(hello.bladeId),
+                  static_cast<unsigned long>(hello.bladeBootId), event.meta.rssiDbm);
+    ESP_LOGI(kTag, "BLADE: detected %s", details);
+    log(DiagnosticLogLevel::Info, "blade_candidate", details);
+  }
   sendBind(*source);
 }
 void ComputerRadioService::sendBind(link::SourceEntry& source) noexcept {
@@ -271,6 +319,17 @@ void ComputerRadioService::handlePaired(const Event& event) noexcept {
       clear.header.networkId != networkId_ || clear.header.senderId != source->bladeId ||
       clear.header.senderBootId != source->bladeBootId)
     return;
+  const bool resumed = source->staleReported;
+  source->lastSeenUs = event.meta.localRxUs;
+  source->staleReported = false;
+  if (resumed) {
+    char details[128]{};
+    std::snprintf(details, sizeof(details), "blade_id=%llu boot=%08lx",
+                  static_cast<unsigned long long>(source->bladeId),
+                  static_cast<unsigned long>(source->bladeBootId));
+    ESP_LOGI(kTag, "BLADE: RESUMED %s", details);
+    log(DiagnosticLogLevel::Info, "blade_resumed", details);
+  }
   if (clear.header.type == link::MessageType::BindAck)
     handleBindAck(*source, clear);
   else if (clear.header.type == link::MessageType::SourceManifest)
@@ -306,10 +365,15 @@ void ComputerRadioService::handleBindAck(link::SourceEntry& source,
       ack.pcBootId != bootId_ || ack.sessionId != recordingId_ || ack.resultCode != 0 ||
       !source.state.onBindAck(ack.bindEpoch).ok())
     return;
-  ESP_LOGI(kTag, "BLADE: CONNECTED boot=%08lx connected=%u",
-           static_cast<unsigned long>(ack.bladeBootId),
-           static_cast<unsigned>(registry_.boundCount()));
-  log(DiagnosticLogLevel::Info, "blade_bound", "application_ack=true");
+  const auto active = registry_.liveBoundCount(
+      static_cast<NativeTimestampUs>(esp_timer_get_time()), kSourceLivenessTimeoutUs);
+  char details[160]{};
+  std::snprintf(details, sizeof(details), "blade_id=%llu boot=%08lx active=%u",
+                static_cast<unsigned long long>(ack.bladeId),
+                static_cast<unsigned long>(ack.bladeBootId),
+                static_cast<unsigned>(active));
+  ESP_LOGI(kTag, "BLADE: CONNECTED %s", details);
+  log(DiagnosticLogLevel::Info, "blade_bound", details);
 }
 
 void ComputerRadioService::handleDataBatch(link::SourceEntry& source, const Event& event,
@@ -400,9 +464,17 @@ void ComputerRadioService::handleDataBatch(link::SourceEntry& source, const Even
 ComputerRadioService::DataSinkStats* ComputerRadioService::dataSink(
     BladeId bladeId, DeviceBootId bladeBootId) noexcept {
   DataSinkStats* empty = nullptr;
+  DataSinkStats* previousBoot = nullptr;
   for (auto& candidate : dataSinks_) {
     if (candidate.bladeId == bladeId && candidate.bladeBootId == bladeBootId) return &candidate;
+    if (candidate.bladeId == bladeId && previousBoot == nullptr) previousBoot = &candidate;
     if (candidate.bladeId == 0 && empty == nullptr) empty = &candidate;
+  }
+  if (previousBoot != nullptr) {
+    *previousBoot = DataSinkStats{};
+    previousBoot->bladeId = bladeId;
+    previousBoot->bladeBootId = bladeBootId;
+    return previousBoot;
   }
   if (empty != nullptr) {
     empty->bladeId = bladeId;

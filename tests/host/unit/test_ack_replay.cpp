@@ -61,10 +61,14 @@ void testAckWindowTracksOutOfOrderAndBackpressure() {
   EXPECT(three.disposition == remus::link::AcceptDisposition::New);
   EXPECT(three.gapDetected);
   EXPECT(tracker.markQueued(3).ok());
+  const auto four = tracker.accept(4);
+  EXPECT(four.disposition == remus::link::AcceptDisposition::New);
+  EXPECT(!four.gapDetected);
+  EXPECT(tracker.markQueued(4).ok());
 
   const auto gap = tracker.buildAckWindow(1001, 77);
   EXPECT(gap.acceptedThrough == 1);
-  EXPECT(gap.receivedBitmap == 0x00000002U);
+  EXPECT(gap.receivedBitmap == 0x00000006U);
 
   remus::link::ReplayRequest request{};
   EXPECT(tracker.nextReplayRequest(1001, 77, request));
@@ -75,7 +79,7 @@ void testAckWindowTracksOutOfOrderAndBackpressure() {
   EXPECT(tracker.accept(2).disposition == remus::link::AcceptDisposition::New);
   EXPECT(tracker.markQueued(2).ok());
   const auto recovered = tracker.buildAckWindow(1001, 77);
-  EXPECT(recovered.acceptedThrough == 3);
+  EXPECT(recovered.acceptedThrough == 4);
   EXPECT(recovered.receivedBitmap == 0);
   EXPECT(!tracker.nextReplayRequest(1001, 77, request));
 }

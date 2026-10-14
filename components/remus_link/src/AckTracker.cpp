@@ -15,6 +15,9 @@ bool AckTracker::offsetFor(std::uint32_t batchSeq, std::uint32_t& offset) const 
 AcceptResult AckTracker::accept(std::uint32_t batchSeq) noexcept {
   if (acceptedValid_ && batchSeq <= acceptedThrough_)
     return {AcceptDisposition::Duplicate, false};
+  const bool newGap = !highestObservedValid_ ? batchSeq > 0
+                                             : batchSeq > highestObserved_ &&
+                                                   batchSeq - highestObserved_ > 1U;
   if (!highestObservedValid_ || batchSeq > highestObserved_) {
     highestObservedValid_ = true;
     highestObserved_ = batchSeq;
@@ -24,10 +27,8 @@ AcceptResult AckTracker::accept(std::uint32_t batchSeq) noexcept {
   const std::uint32_t mask = std::uint32_t{1} << offset;
   if ((acceptedBitmap_ & mask) != 0 || (pendingBitmap_ & mask) != 0)
     return {AcceptDisposition::Duplicate, false};
-  const std::uint32_t lowerMask = offset == 0 ? 0 : (mask - 1U);
-  const bool gap = offset > 0 && (acceptedBitmap_ & lowerMask) != lowerMask;
   pendingBitmap_ |= mask;
-  return {AcceptDisposition::New, gap};
+  return {AcceptDisposition::New, newGap};
 }
 
 Status AckTracker::markQueued(std::uint32_t batchSeq) noexcept {
