@@ -4,6 +4,7 @@
 #include "FakeCrypto.hpp"
 #include "remus/link/FrameCodec.hpp"
 #include "remus/link/MessageCodec.hpp"
+#include "remus/link/SourceManifestBuilder.hpp"
 
 namespace {
 int failures = 0;
@@ -35,6 +36,7 @@ void testTenSampleDataBatchIsExactly244Bytes() {
     batch.samples[index] = {static_cast<std::uint16_t>(index * 500),
                             static_cast<std::int16_t>(index), 2, 3, 4, 5, 6, 0};
   }
+  batch.samples[9].flags = 3;
   std::uint8_t payload[remus::link::kMaximumPayloadBytes]{};
   std::size_t payloadSize = 0;
   EXPECT(remus::link::MessageCodec::encode(batch, payload, sizeof(payload), payloadSize).ok());
@@ -45,7 +47,7 @@ void testTenSampleDataBatchIsExactly244Bytes() {
          "dc050300020003000400050006000000d0070400020003000400050006000000"
          "c4090500020003000400050006000000b80b0600020003000400050006000000"
          "ac0d0700020003000400050006000000a00f0800020003000400050006000000"
-         "94110900020003000400050006000000");
+         "94110900020003000400050006000300");
 
   remus::test::FakeCrypto crypto;
   remus::link::FrameCodec codec(crypto);
@@ -61,6 +63,7 @@ void testTenSampleDataBatchIsExactly244Bytes() {
   EXPECT(decoded.sampleCount == 10);
   EXPECT(decoded.samples[9].deltaTicks10us == 4500);
   EXPECT(decoded.samples[9].ax == 9);
+  EXPECT(decoded.samples[9].flags == 3);
   EXPECT(remus::link::MessageCodec::decode(payload, payloadSize - 1, decoded).error ==
          remus::Error::InvalidArgument);
 }
@@ -82,10 +85,37 @@ void testSourceManifestHasAll34NormativeBytes() {
   EXPECT(decoded.lsbPerG == 4096);
   EXPECT(decoded.lsbPerDpsX10 == 655);
 }
+
+void testSourceManifestComesFromVerifiedEffectiveProfile() {
+  const auto requested = remus::core::bladeImuProfile();
+  const remus::core::EffectiveImuProfile effective{requested, 0x68, 0x68, 0x18, 0x18,
+                                                   0x03,      0x04, 2048, 164,  true};
+  remus::link::SourceManifest manifest{};
+  EXPECT(remus::link::buildSourceManifest(11, 22, effective, manifest).ok());
+  EXPECT(manifest.bladeId == 11);
+  EXPECT(manifest.bladeBootId == 22);
+  EXPECT(manifest.imuModel == 0x68);
+  EXPECT(manifest.accelFsG == 16);
+  EXPECT(manifest.gyroFsDps == 2000);
+  EXPECT(manifest.dlpfHz == 42);
+  EXPECT(manifest.targetRateHz == 200);
+  EXPECT(manifest.lsbPerG == 2048);
+  EXPECT(manifest.lsbPerDpsX10 == 164);
+
+  auto unverified = effective;
+  unverified.verified = false;
+  EXPECT(remus::link::buildSourceManifest(11, 22, unverified, manifest).error ==
+         remus::Error::NotReady);
+  auto mismatched = effective;
+  mismatched.gyroRegister = 0x08;
+  EXPECT(remus::link::buildSourceManifest(11, 22, mismatched, manifest).error ==
+         remus::Error::InvalidArgument);
+}
 }  // namespace
 
 int main() {
   testTenSampleDataBatchIsExactly244Bytes();
   testSourceManifestHasAll34NormativeBytes();
+  testSourceManifestComesFromVerifiedEffectiveProfile();
   return failures == 0 ? 0 : 1;
 }

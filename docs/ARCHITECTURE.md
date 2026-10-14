@@ -1,4 +1,4 @@
-# Firmware architecture through M2
+# Firmware architecture through M4
 
 The Remus firmware produces two independent images from one repository:
 
@@ -72,5 +72,25 @@ bounds the Computer to eight sources, and `RadioSupervisor` turns isolated and
 persistent failures into explicit policy actions. MAC delivery never marks a
 Blade bound; only a valid pair-authenticated `BIND_ACK` can do that.
 
-There is still no acquisition, session storage, navigation, replay, session
-control, or time synchronization. `FakeCrypto` remains host-test-only.
+## M3 acquisition and M4 recovery boundary
+
+Both roles sample the MPU-6050 at 200 Hz through the shared acquisition
+pipeline and produce bounded ten-sample `DATA_BATCH` payloads. Role-specific
+composition roots own their GPIO profiles; the driver and batching semantics
+remain shared.
+
+The Blade radio owner retains encoded batches in a fixed 256-entry
+`ReplayWindow`. The Computer's per-source `AckTracker` separates frame
+validation, writer admission, and durable SD checkpoint progress. Out-of-order
+admission produces a 32-bit selective window and bounded `REPLAY_REQUEST`;
+overflow produces an explicit `GAP_NOTICE`. Replay traffic is limited to four
+batches per request so new acquisition traffic continues to make progress.
+
+The SD task is the only owner of RMS1 file I/O. It publishes a per-source
+checkpoint watermark only after successful `fflush` and `fsync`. An
+irrecoverable range is first appended as an RMS1 `GAP` record; therefore a
+radio ACK cannot silently convert missing evidence into durable data.
+
+There is still no GPS, explicit START/STOP session lifecycle, clean session
+finalization, recovery-on-boot, OTA, or time synchronization. `FakeCrypto`
+remains host-test-only.

@@ -11,8 +11,7 @@ class SdDiagnosticLogger;
 
 class ComputerAcquisitionService final : public acquisition::IAcquisitionSink {
  public:
-  explicit ComputerAcquisitionService(
-      const platform::esp32::Mpu6050Config& imuConfig) noexcept
+  explicit ComputerAcquisitionService(const platform::esp32::Mpu6050Config& imuConfig) noexcept
       : imu_(imuConfig) {}
   Status start(RecordingId recordingId) noexcept;
   Status onBatchReady(const acquisition::SampleBatch& batch) noexcept override;
@@ -21,6 +20,9 @@ class ComputerAcquisitionService final : public acquisition::IAcquisitionSink {
   acquisition::SamplingMetrics metrics() const noexcept { return pipeline_.metrics(); }
   std::uint8_t detectedAddress() const noexcept { return imu_.detectedAddress(); }
   std::uint8_t detectedIdentity() const noexcept { return imu_.detectedIdentity(); }
+  const core::EffectiveImuProfile& effectiveImuProfile() const noexcept {
+    return imu_.effectiveProfile();
+  }
   void setStorageContext(SdDiagnosticLogger* storage, ComputerId computerId,
                          DeviceBootId bootId) noexcept {
     storage_ = storage;

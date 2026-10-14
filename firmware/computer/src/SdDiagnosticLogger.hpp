@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -47,7 +48,12 @@ class SdDiagnosticLogger {
   bool enqueueSourceManifest(std::uint64_t originId, std::uint32_t originBootId,
                              const std::uint8_t* manifestPayload,
                              std::size_t manifestPayloadSize) noexcept;
+  bool enqueueGap(std::uint64_t originId, std::uint32_t originBootId,
+                  std::uint32_t fromBatchSeq, std::uint32_t throughBatchSeq,
+                  std::uint64_t firstSampleIndex, std::uint16_t reason) noexcept;
   SdDiagnosticLoggerStats stats() const noexcept;
+  bool checkpointedThrough(std::uint64_t originId, std::uint32_t originBootId,
+                           std::uint32_t& batchSeq) const noexcept;
   bool isReady() const noexcept { return ready_; }
   bool isRecording() const noexcept { return rmsHealthy_.load(); }
 
@@ -57,7 +63,7 @@ class SdDiagnosticLogger {
   static constexpr std::size_t kLineCapacity = 640;
   static constexpr std::uint32_t kTaskStackBytes = 8192;
 
-  enum class RmsEntryKind : std::uint8_t { ImuBatch, SourceManifest };
+  enum class RmsEntryKind : std::uint8_t { ImuBatch, SourceManifest, Gap };
   struct ImuBatchEntry {
     std::uint64_t originId;
     std::uint32_t originBootId;
@@ -80,12 +86,33 @@ class SdDiagnosticLogger {
         std::uint32_t originBootId;
         std::uint8_t payload[34];
       } manifest;
+      struct {
+        std::uint64_t originId;
+        std::uint32_t originBootId;
+        std::uint32_t fromBatchSeq;
+        std::uint32_t throughBatchSeq;
+        std::uint64_t firstSampleIndex;
+        std::uint16_t reason;
+      } gap;
     };
     RmsEntry() noexcept : imu{} {}
   };
 
   static void taskEntry(void* context) noexcept;
   void run() noexcept;
+  void markBatchWritten(std::uint64_t originId, std::uint32_t originBootId,
+                        std::uint32_t batchSeq) noexcept;
+  void publishCheckpoints() noexcept;
+
+  struct CheckpointProgress {
+    std::atomic<std::uint64_t> originId{0};
+    std::atomic<std::uint32_t> originBootId{0};
+    std::uint32_t writtenThrough{0};
+    std::uint32_t writtenBitmap{0};
+    bool writtenValid{false};
+    std::atomic<std::uint32_t> publishedThrough{0};
+    std::atomic<bool> publishedValid{false};
+  };
 
   diagnostics::RotatingTextLog log_{{"/sdcard/remus_pc.log",
                                      "/sdcard/remus_pc.log.1", 512U * 1024U,
@@ -119,6 +146,8 @@ class SdDiagnosticLogger {
   std::atomic<std::uint32_t> diagnosticQueueHighWater_{0};
   std::atomic<std::uint32_t> rmsQueueHighWater_{0};
   std::atomic<bool> rmsHealthy_{false};
+  // Eight remote Blades plus the Computer's local IMU are independent sources.
+  std::array<CheckpointProgress, 9> checkpointProgress_{};
   bool ready_{false};
 };
 

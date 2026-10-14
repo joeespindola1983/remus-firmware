@@ -14,6 +14,9 @@ explicitly and never serializes native C++ structure layout.
 | `BIND` | `0x03` | 32 bytes | `pairAuthKey` plus ESP-NOW LMK |
 | `BIND_ACK` | `0x04` | 32 bytes | `pairAuthKey` plus ESP-NOW LMK |
 | `DATA_BATCH` | `0x09` | 32–176 bytes | `pairAuthKey` plus ESP-NOW LMK |
+| `ACK_WINDOW` | `0x0A` | 28 bytes | `pairAuthKey` plus ESP-NOW LMK |
+| `REPLAY_REQUEST` | `0x0B` | 20 bytes | `pairAuthKey` plus ESP-NOW LMK |
+| `GAP_NOTICE` | `0x0C` | 32 bytes | `pairAuthKey` plus ESP-NOW LMK |
 | `SOURCE_MANIFEST` | `0x11` | 34 bytes | `pairAuthKey` plus ESP-NOW LMK |
 
 The exact field order and offsets are normative in
@@ -44,6 +47,42 @@ ac0d0700020003000400050006000000a00f0800020003000400050006000000
 The decoder requires the exact length implied by `sampleCount`. A missing IMU
 read consumes its sample index; the next valid non-contiguous sample closes the
 partial batch so a receiver can observe the gap.
+
+## ACK, replay, and irreversible gaps
+
+`ACK_WINDOW` carries two independent watermarks. `acceptedThrough` advances
+only after the Computer's bounded RMS writer queue accepts the batch.
+`checkpointedThrough` advances only after the corresponding RMS1 bytes (or an
+explicit RMS1 `GAP` record) have been written, flushed, and synchronized. Bits
+0 and 1 of `receiverHealth` say whether each watermark is valid; a serialized
+zero with its validity bit clear is not an ACK for sequence zero. Bit 2 reports
+degraded storage. `receivedBitmap` describes the next 32 sequences after the
+accepted watermark, or sequences 0–31 before that watermark first becomes
+valid.
+
+The Computer emits an ACK every ten admitted batches, immediately after an
+out-of-order batch, and at least every 500 ms while the source is active. It
+requests at most four replay batches per request and throttles an identical
+request for 200 ms. The Blade retains 256 encoded batches and releases them
+only at the durable checkpoint watermark. If recovery is impossible it emits a
+bounded `GAP_NOTICE`; the Computer persists that loss before acknowledging
+progress across it.
+
+`GAP_NOTICE.reason` values currently emitted are 1 for replay-ring overflow, 2
+for a requested sequence already known to be unavailable, and 3 for overflow
+of the acquisition-to-radio event queue. Unknown values remain preserved in
+RMS1 evidence.
+
+Exact payload golden vectors (`bladeId=1`, `bladeBootId=2`) are:
+
+```text
+ACK_WINDOW:     01000000000000000200000003000000010000800000000001000000
+REPLAY_REQUEST: 0100000000000000020000000700000010010000
+GAP_NOTICE:     0100000000000000020000000700000009000000460000000000000001000000
+```
+
+RMS1 `GAP` payload flag bit 0 means `lastSampleIndex` is unavailable. In that
+case the writer stores `UINT64_MAX` in that field instead of inventing an index.
 
 ## Validation order
 

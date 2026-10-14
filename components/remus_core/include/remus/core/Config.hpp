@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "remus/core/ImuProfile.hpp"
 #include "remus/core/Status.hpp"
 
 namespace remus {
@@ -17,11 +18,8 @@ struct RadioConfig {
 };
 
 struct SamplingConfig {
-  std::uint16_t samplingRateHertz{kNominalSamplingRateHertz};
+  core::ImuProfile imuProfile{core::computerImuProfile()};
   std::uint8_t samplesPerBatch{kNominalSamplesPerBatch};
-  std::uint8_t accelerometerRangeG{8};
-  std::uint16_t gyroscopeRangeDegreesPerSecond{1000};
-  std::uint16_t digitalLowPassFilterHertz{0};
 };
 
 struct CapacityConfig {

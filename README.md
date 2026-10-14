@@ -3,12 +3,12 @@
 Greenfield firmware for the Remus Computer and Remus Blade, built with C++17,
 ESP-IDF, and PlatformIO.
 
-This repository currently implements the M0-M3 acquisition path and an early,
+This repository currently implements the M0-M4 software path and an early,
 GPS-free slice of the M5 RMS1 writer: build foundations, bounded diagnostics,
 authenticated ESP-NOW association, 200 Hz raw IMU acquisition on Computer and
-Blade, DATA_BATCH transport, and append-only recording on the Computer SD card.
-Replay/ACK checkpointing, GPS, clean session finalization, and OTA are not yet
-implemented.
+Blade, selective DATA_BATCH replay, distinct RAM/durable ACK watermarks, and
+append-only recording on the Computer SD card. GPS, explicit START/STOP session
+control, clean finalization, recovery-on-boot, and OTA are not yet implemented.
 
 M2 broadcasts authenticated `BEACON`/`HELLO`, derives per-pair keys, registers
 encrypted peers, and considers a Blade bound only after its authenticated
@@ -58,6 +58,14 @@ DATA_BATCH sizes. It reports every source independently and infers discontinuity
 counts from batch and sample indices. Each source also persists a
 `SOURCE_MANIFEST`; CSV output retains the raw axes and adds calibrated g/dps
 columns derived from that recorded metadata.
+
+M4 retains 256 encoded batches per Blade in bounded RAM. The Computer sends an
+`ACK_WINDOW` every ten admitted batches, immediately on a detected gap, or at a
+500 ms heartbeat. A batch remains in the Blade replay ring until the Computer
+reports a real SD checkpoint; an irreversible loss is stored as an RMS1 `GAP`
+record before its sequence can become checkpointed. Follow
+[`tests/hardware/runbooks/M4_ACK_REPLAY.md`](tests/hardware/runbooks/M4_ACK_REPLAY.md)
+for the physical loss/recovery gate.
 
 Before the first M2 bench test, provision each board's NVS using
 [`tools/provision_nvs.sh`](tools/provision_nvs.sh) and follow

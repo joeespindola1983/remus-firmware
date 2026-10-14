@@ -10,7 +10,7 @@
 namespace remus::acquisition {
 
 struct SamplingConfig {
-  std::uint16_t rateHz{200};
+  core::ImuProfile imuProfile{core::computerImuProfile()};
 };
 
 struct SamplingMetrics {

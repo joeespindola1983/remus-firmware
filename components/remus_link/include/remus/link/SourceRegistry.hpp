@@ -20,6 +20,8 @@ struct SourceEntry {
   std::uint32_t bindEpoch{0};
   std::uint8_t bindAttempts{0};
   NativeTimestampUs nextBindAttemptUs{0};
+  NativeTimestampUs lastSeenUs{0};
+  bool staleReported{false};
 };
 
 class SourceRegistry {
@@ -35,6 +37,9 @@ class SourceRegistry {
                                MacAddress* removed = nullptr,
                                std::size_t removedCapacity = 0) noexcept;
   std::size_t size() const noexcept { return size_; }
+  std::size_t boundCount() const noexcept;
+  std::size_t liveBoundCount(NativeTimestampUs nowUs,
+                             NativeTimestampUs timeoutUs) const noexcept;
   static constexpr std::size_t capacity() noexcept { return kMaximumParticipants; }
 
  private:

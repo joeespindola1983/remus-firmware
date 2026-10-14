@@ -8,6 +8,7 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "remus/hal/IRadio.hpp"
+#include "remus/link/AckTracker.hpp"
 #include "remus/link/FrameCodec.hpp"
 #include "remus/link/KeyDerivation.hpp"
 #include "remus/link/RadioSupervisor.hpp"
@@ -18,6 +19,14 @@
 #include "remus/platform/esp32/NvsCredentials.hpp"
 
 namespace remus::computer {
+struct ComputerRecoveryStats {
+  std::uint32_t ackFramesQueued{0};
+  std::uint32_t checkpointAcksQueued{0};
+  std::uint32_t replayRequestsQueued{0};
+  std::uint32_t duplicateBatches{0};
+  std::uint32_t outsideWindowBatches{0};
+  std::uint32_t unrecoverableGaps{0};
+};
 class ComputerRadioService final : public hal::IRadioEvents {
  public:
   ComputerRadioService(SdDiagnosticLogger* diagnosticLog, RecordingId recordingId) noexcept
@@ -31,8 +40,10 @@ class ComputerRadioService final : public hal::IRadioEvents {
   void onRadioReceived(const hal::RadioRxMeta&, const std::uint8_t*, std::size_t) noexcept override;
   void onRadioSendComplete(const MacAddress&, bool) noexcept override;
   std::size_t sourceCount() const noexcept { return registry_.size(); }
+  ComputerRecoveryStats recoveryStats() const noexcept;
 
  private:
+  struct DataSinkStats;
   enum class EventKind : std::uint8_t { Receive, SendComplete, CaptureEnabled };
   struct Event {
     EventKind kind{};
@@ -51,8 +62,12 @@ class ComputerRadioService final : public hal::IRadioEvents {
   void handleBindAck(link::SourceEntry&, const link::DecodedFrame&) noexcept;
   void handleDataBatch(link::SourceEntry&, const Event&, const link::DecodedFrame&) noexcept;
   void handleSourceManifest(link::SourceEntry&, const link::DecodedFrame&) noexcept;
+  void handleGapNotice(link::SourceEntry&, const link::DecodedFrame&) noexcept;
   void sendBeacon() noexcept;
   void sendBind(link::SourceEntry&) noexcept;
+  void sendAckAndReplay(link::SourceEntry&, DataSinkStats&, bool,
+                        NativeTimestampUs) noexcept;
+  DataSinkStats* dataSink(BladeId, DeviceBootId) noexcept;
   Status recoverRadio(NativeTimestampUs nowUs) noexcept;
   bool enqueue(const Event&) noexcept;
   void log(DiagnosticLogLevel, const char*, const char*) noexcept;
@@ -72,17 +87,25 @@ class ComputerRadioService final : public hal::IRadioEvents {
   struct DataSinkStats {
     BladeId bladeId{0};
     DeviceBootId bladeBootId{0};
-    std::uint32_t nextBatchSeq{0};
-    SampleIndex nextSampleIndex{0};
     std::uint64_t batches{0};
     std::uint64_t samples{0};
     std::uint32_t gaps{0};
+    std::uint32_t duplicates{0};
+    std::uint32_t outsideWindow{0};
+    std::uint32_t unrecoverableGaps{0};
+    std::uint32_t acceptedAtLastAck{0};
+    NativeTimestampUs lastAckSentUs{0};
+    NativeTimestampUs lastReplayRequestUs{0};
+    std::uint32_t lastReplayFirstSeq{0};
+    bool lastReplayValid{false};
+    link::AckTracker ack{};
   };
   std::array<DataSinkStats, link::SourceRegistry::capacity()> dataSinks_{};
   std::array<std::uint8_t, 32> secret_{};
   std::array<std::uint8_t, 32> groupKey_{};
   std::uint32_t beaconSeq_{0};
   std::uint32_t messageSeq_{0};
+  NativeTimestampUs lastRejectedHelloUs_{0};
   QueueHandle_t queue_{nullptr};
   StaticQueue_t queueBuffer_{};
   std::uint8_t queueStorage_[kQueueCapacity * sizeof(Event)]{};
@@ -90,5 +113,11 @@ class ComputerRadioService final : public hal::IRadioEvents {
   StackType_t taskStack_[5120]{};
   TaskHandle_t task_{nullptr};
   std::atomic<bool> captureAllowed_{false};
+  std::atomic<std::uint32_t> ackFramesQueued_{0};
+  std::atomic<std::uint32_t> checkpointAcksQueued_{0};
+  std::atomic<std::uint32_t> replayRequestsQueued_{0};
+  std::atomic<std::uint32_t> duplicateBatches_{0};
+  std::atomic<std::uint32_t> outsideWindowBatches_{0};
+  std::atomic<std::uint32_t> unrecoverableGaps_{0};
 };
 }  // namespace remus::computer

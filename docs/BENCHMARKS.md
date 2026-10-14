@@ -106,3 +106,33 @@ not close H3: a sustained capture with two Blades, Blade restart/reassociation,
 and the remaining boot-order cases are still required. GPS, replay/ACK
 checkpointing, clean session finalization, and OTA remain outside this captured
 firmware slice.
+
+## M4 software baseline — 2026-10-14
+
+Selective replay and distinct RAM/durable ACK progress are implemented on
+`feature/m4-ack-replay`. This is software evidence, not the physical RF-loss
+acceptance gate.
+
+| Item | Observed result |
+|---|---|
+| Host CTest | PASS; 12/12 tests |
+| Deterministic loss simulation | PASS; dropped sequence requested, replayed, deduplicated, and checkpoint-released |
+| ACK invariants | PASS; writer backpressure cannot advance RAM ACK and no checkpoint is invented before sync |
+| GAP invariants | PASS; long contiguous gaps advance safely; invalid out-of-window gaps are rejected atomically |
+| Blade build | PASS; RAM 119,396 B (36.4%); app image 824,140 B |
+| Computer build | PASS; RAM 112,900 B (34.5%); app image 938,828 B |
+| Application partition | 3 MiB; Blade 26.2%, Computer 29.8% |
+| Provisioning compatibility | NVS preserved at offset `0x9000`, size `0x6000` |
+
+The Computer ACK cadence is ten accepted batches, immediate on a gap, or a
+500 ms heartbeat. The Blade retains 256 batches and does not release them on a
+RAM-only ACK. The durable watermark originates only after RMS1 `fflush` and
+`fsync`; an irreversible loss is represented by a persisted RMS1 `GAP` record.
+The inspector validates and reports explicit gap records separately from gaps
+inferred from batch/sample discontinuity.
+
+Physical acceptance remains pending: install this firmware on the Computer and
+both Blades, then execute
+[`tests/hardware/runbooks/M4_ACK_REPLAY.md`](../tests/hardware/runbooks/M4_ACK_REPLAY.md).
+Required evidence includes controlled packet loss, replay recovery without
+duplicate RMS batches, bounded replay depth, and continued 200 Hz acquisition.

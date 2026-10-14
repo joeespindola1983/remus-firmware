@@ -32,7 +32,10 @@ class Mpu6050Driver final : public hal::IImu {
   explicit Mpu6050Driver(const Mpu6050Config& config) noexcept : config_(config) {}
   ~Mpu6050Driver() override;
 
-  Status initialize(std::uint16_t samplingRateHertz) noexcept override;
+  Status initialize(const core::ImuProfile& profile) noexcept override;
+  const core::EffectiveImuProfile& effectiveProfile() const noexcept override {
+    return effectiveProfile_;
+  }
   Status configureFifo(bool enabled) noexcept override;
   Status read(hal::ImuRaw& out) noexcept override;
   Status readFifo(hal::ImuRaw* destination, std::size_t maxSamples,
@@ -61,6 +64,7 @@ class Mpu6050Driver final : public hal::IImu {
   std::uint8_t detectedAddress_{0};
   std::uint8_t detectedIdentity_{0};
   std::uint8_t configuredDivider_{0};
+  core::EffectiveImuProfile effectiveProfile_{};
 };
 
 }  // namespace remus::platform::esp32
