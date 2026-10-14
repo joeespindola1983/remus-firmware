@@ -104,7 +104,10 @@ Status SdDiagnosticLogger::start() noexcept {
     return Status::failure(Error::StorageUnavailable);
   }
 
-  if (xTaskCreateStatic(taskEntry, "sd_diag_log", kTaskStackDepth, this,
+  // ESP-IDF expresses task stack size in bytes. The backing buffer is an
+  // array of StackType_t, so passing the element count only exposed 2 KiB and
+  // caused the FAT/stdio writer to trip the stack protector during boot.
+  if (xTaskCreateStatic(taskEntry, "sd_diag_log", sizeof(taskStack_), this,
                         tskIDLE_PRIORITY + 1, taskStack_, &taskBuffer_) == nullptr) {
     log_.close();
     esp_vfs_fat_sdcard_unmount(kMountPoint, card_);
