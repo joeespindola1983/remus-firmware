@@ -217,8 +217,27 @@ void ComputerRadioService::handlePaired(const Event& event) noexcept {
     return;
   if (clear.header.type == link::MessageType::BindAck)
     handleBindAck(*source, clear);
+  else if (clear.header.type == link::MessageType::SourceManifest)
+    handleSourceManifest(*source, clear);
   else if (clear.header.type == link::MessageType::DataBatch)
     handleDataBatch(*source, event, clear);
+}
+
+void ComputerRadioService::handleSourceManifest(link::SourceEntry& source,
+                                                const link::DecodedFrame& clear) noexcept {
+  if (source.state.state() != link::ComputerPeerState::Bound ||
+      clear.header.recordingId != recordingId_)
+    return;
+  link::SourceManifest manifest{};
+  if (!link::MessageCodec::decode(clear.payload.data(), clear.payloadSize, manifest).ok() ||
+      manifest.bladeId != source.bladeId || manifest.bladeBootId != source.bladeBootId ||
+      diagnosticLog_ == nullptr ||
+      !diagnosticLog_->enqueueSourceManifest(source.bladeId, source.bladeBootId,
+                                             clear.payload.data(), clear.payloadSize)) {
+    log(DiagnosticLogLevel::Error, "source_manifest_rejected", "invalid_or_queue_full=true");
+    return;
+  }
+  log(DiagnosticLogLevel::Info, "source_manifest_recorded", "imu_profile_received=true");
 }
 
 void ComputerRadioService::handleBindAck(link::SourceEntry& source,

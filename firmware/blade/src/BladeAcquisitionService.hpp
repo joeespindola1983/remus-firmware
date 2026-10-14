@@ -17,6 +17,7 @@ class BladeAcquisitionService final : public acquisition::IAcquisitionSink {
   Status start() noexcept;
   Status beginCapture(RecordingId recordingId) noexcept;
   acquisition::SamplingMetrics metrics() const noexcept { return pipeline_.metrics(); }
+  std::uint8_t detectedIdentity() const noexcept { return imu_.detectedIdentity(); }
   Status onBatchReady(const acquisition::SampleBatch& source) noexcept override;
 
  private:

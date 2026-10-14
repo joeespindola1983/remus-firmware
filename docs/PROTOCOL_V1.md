@@ -14,7 +14,7 @@ explicitly and never serializes native C++ structure layout.
 | `BIND` | `0x03` | 32 bytes | `pairAuthKey` plus ESP-NOW LMK |
 | `BIND_ACK` | `0x04` | 32 bytes | `pairAuthKey` plus ESP-NOW LMK |
 | `DATA_BATCH` | `0x09` | 32–176 bytes | `pairAuthKey` plus ESP-NOW LMK |
-| `SOURCE_MANIFEST` | `0x11` | 32 bytes | `pairAuthKey` plus ESP-NOW LMK |
+| `SOURCE_MANIFEST` | `0x11` | 34 bytes | `pairAuthKey` plus ESP-NOW LMK |
 
 The exact field order and offsets are normative in
 [`RFS-001-IMPLEMENTATION.md`](RFS-001-IMPLEMENTATION.md), sections 9.2 and 9.5.

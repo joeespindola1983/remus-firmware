@@ -58,6 +58,14 @@ class InspectorTest(unittest.TestCase):
         with self.assertRaises(MODULE.RmsError):
             MODULE.read_header(io.BytesIO(raw))
 
+    def test_decodes_source_manifest_conversion_metadata(self):
+        payload = struct.pack("<QIHBxHHHBxHBBHHHI", 88, 99, 0x70, 8, 500, 42,
+                              200, 0, 0, 0, 0, 0, 4096, 655, 0)
+        record = MODULE.Record(64, MODULE.SOURCE_MANIFEST, 1, 0, 88, 99, 0, payload)
+        manifest = MODULE.decode_manifest(record)
+        self.assertEqual(manifest["lsb_per_g"], 4096)
+        self.assertEqual(manifest["lsb_per_dps_x10"], 655)
+
 
 if __name__ == "__main__":
     unittest.main()

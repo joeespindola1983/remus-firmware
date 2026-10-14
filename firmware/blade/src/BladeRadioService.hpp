@@ -43,6 +43,7 @@ class BladeRadioService final : public hal::IRadioEvents {
   void run() noexcept;
   void handleReceive(const Event&) noexcept;
   void sendHello() noexcept;
+  void sendSourceManifest() noexcept;
   void sendDataBatch(const Event&) noexcept;
   bool enqueue(const Event&) noexcept;
   static constexpr std::size_t kQueueCapacity = 16;

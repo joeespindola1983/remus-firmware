@@ -64,9 +64,28 @@ void testTenSampleDataBatchIsExactly244Bytes() {
   EXPECT(remus::link::MessageCodec::decode(payload, payloadSize - 1, decoded).error ==
          remus::Error::InvalidArgument);
 }
+
+void testSourceManifestHasAll34NormativeBytes() {
+  const remus::link::SourceManifest manifest{1, 2, 0x70, 8, 500, 42, 200,
+                                              0, 0, 0, 0, 0, 4096, 655};
+  std::uint8_t payload[remus::link::kSourceManifestPayloadBytes]{};
+  std::size_t payloadSize = 0;
+  EXPECT(remus::link::MessageCodec::encode(manifest, payload, sizeof(payload), payloadSize).ok());
+  EXPECT(payloadSize == 34);
+  EXPECT(toHex(payload, payloadSize) ==
+         "01000000000000000200000070000800f4012a00c800000000000000000000108f02");
+  remus::link::SourceManifest decoded{};
+  EXPECT(remus::link::MessageCodec::decode(payload, payloadSize, decoded).ok());
+  EXPECT(decoded.imuModel == 0x70);
+  EXPECT(decoded.accelFsG == 8);
+  EXPECT(decoded.gyroFsDps == 500);
+  EXPECT(decoded.lsbPerG == 4096);
+  EXPECT(decoded.lsbPerDpsX10 == 655);
+}
 }  // namespace
 
 int main() {
   testTenSampleDataBatchIsExactly244Bytes();
+  testSourceManifestHasAll34NormativeBytes();
   return failures == 0 ? 0 : 1;
 }

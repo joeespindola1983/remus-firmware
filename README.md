@@ -55,8 +55,9 @@ python3 tools/remus-inspect/remus_inspect.py /Volumes/REMUS/RM_*.rms --csv imu.c
 
 The inspector verifies session and record CRC32C values, record ordinals, and
 DATA_BATCH sizes. It reports every source independently and infers discontinuity
-counts from batch and sample indices. Raw axes remain raw evidence; conversion
-metadata via `SOURCE_MANIFEST` is part of the remaining M5 work.
+counts from batch and sample indices. Each source also persists a
+`SOURCE_MANIFEST`; CSV output retains the raw axes and adds calibrated g/dps
+columns derived from that recorded metadata.
 
 Before the first M2 bench test, provision each board's NVS using
 [`tools/provision_nvs.sh`](tools/provision_nvs.sh) and follow

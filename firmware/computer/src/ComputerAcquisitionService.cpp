@@ -21,6 +21,15 @@ Status ComputerAcquisitionService::start(RecordingId recordingId) noexcept {
   if (!status.ok()) return status;
   status = pipeline_.startSession(recordingId);
   if (!status.ok()) return status;
+  link::SourceManifest manifest{computerId_, bootId_, imu_.detectedIdentity(), 8, 500, 42, 200,
+                                0, 0, 0, 0, 0, 4096, 655};
+  std::uint8_t manifestPayload[link::kSourceManifestPayloadBytes]{};
+  std::size_t manifestSize = 0;
+  status = link::MessageCodec::encode(manifest, manifestPayload, sizeof(manifestPayload),
+                                      manifestSize);
+  if (!status.ok() || storage_ == nullptr ||
+      !storage_->enqueueSourceManifest(computerId_, bootId_, manifestPayload, manifestSize))
+    return Status::failure(Error::QueueFull);
   task_ = xTaskCreateStatic(taskEntry, "computer_imu", 4096, this, 12, taskStack_, &taskBuffer_);
   if (task_ == nullptr) return Status::failure(Error::NotReady);
   ESP_LOGW(kTag,

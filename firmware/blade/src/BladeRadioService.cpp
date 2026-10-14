@@ -166,7 +166,29 @@ void BladeRadioService::handleReceive(const Event& e) noexcept {
   if (codec_.encode(h, payload, n, pairKeys_.pairAuthKey.data(), pairKeys_.pairAuthKey.size(), out)
           .ok())
     tx_.enqueue(computerAddress_, out.bytes.data(), out.size);
+  if (bind.allowCapture != 0 && captureStatus.ok()) sendSourceManifest();
   ESP_LOGI(kTag, "state=Bound bind_epoch=%lu", static_cast<unsigned long>(bind.bindEpoch));
+}
+
+void BladeRadioService::sendSourceManifest() noexcept {
+  if (acquisition_ == nullptr) return;
+  const link::SourceManifest manifest{deviceId_, bootId_, acquisition_->detectedIdentity(),
+                                      8, 500, 42, 200, 0, 0, 0, 0, 0, 4096, 655};
+  std::uint8_t payload[link::kSourceManifestPayloadBytes]{};
+  std::size_t payloadSize = 0;
+  if (!link::MessageCodec::encode(manifest, payload, sizeof(payload), payloadSize).ok()) return;
+  const link::FrameHeader header{link::MessageType::SourceManifest,
+                                 0,
+                                 networkId_,
+                                 deviceId_,
+                                 bootId_,
+                                 state_.recordingId(),
+                                 ++messageSeq_,
+                                 static_cast<NativeTimestampUs>(esp_timer_get_time())};
+  link::EncodedFrame frame{};
+  if (codec_.encode(header, payload, payloadSize, pairKeys_.pairAuthKey.data(),
+                    pairKeys_.pairAuthKey.size(), frame).ok())
+    tx_.enqueue(computerAddress_, frame.bytes.data(), frame.size);
 }
 
 Status BladeRadioService::queueDataBatch(RecordingId recordingId, NativeTimestampUs originMonoUs,

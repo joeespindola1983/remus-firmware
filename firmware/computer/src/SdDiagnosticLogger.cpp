@@ -206,6 +206,28 @@ bool SdDiagnosticLogger::enqueueImuBatch(std::uint64_t originId,
   return true;
 }
 
+bool SdDiagnosticLogger::enqueueSourceManifest(std::uint64_t originId,
+                                               std::uint32_t originBootId,
+                                               const std::uint8_t* payload,
+                                               std::size_t payloadSize) noexcept {
+  if (!rmsHealthy_.load() || queue_ == nullptr || originId == 0 || originBootId == 0 ||
+      payload == nullptr || payloadSize != 34) {
+    ++rmsDropped_;
+    return false;
+  }
+  LogEntry entry{};
+  entry.kind = EntryKind::SourceManifest;
+  entry.manifest.originId = originId;
+  entry.manifest.originBootId = originBootId;
+  std::memcpy(entry.manifest.payload, payload, payloadSize);
+  if (xQueueSend(queue_, &entry, 0) != pdTRUE) {
+    ++rmsDropped_;
+    return false;
+  }
+  ++rmsQueued_;
+  return true;
+}
+
 SdDiagnosticLoggerStats SdDiagnosticLogger::stats() const noexcept {
   return {queued_.load(), dropped_.load(), writeFailures_.load(), rotations_.load(),
           rmsQueued_.load(), rmsWritten_.load(), rmsDropped_.load(),
@@ -226,6 +248,30 @@ void SdDiagnosticLogger::run() noexcept {
         continue;
       }
       std::uint8_t payload[storage::kRms1MaximumPayloadBytes]{};
+      if (entry.kind == EntryKind::SourceManifest) {
+        std::memcpy(payload, entry.manifest.payload, 34);
+        storage::Rms1Record record{storage::Rms1RecordType::SourceManifest,
+                                   ++rmsOrdinal_,
+                                   static_cast<std::uint64_t>(esp_timer_get_time()),
+                                   entry.manifest.originId,
+                                   entry.manifest.originBootId,
+                                   0,
+                                   payload,
+                                   38};
+        std::uint8_t encoded[storage::kRms1MaximumRecordBytes]{};
+        std::size_t encodedSize = 0;
+        if (!rmsHealthy_.load() || rmsFile_ == nullptr ||
+            !storage::encodeRecord(record, encoded, sizeof(encoded), encodedSize).ok() ||
+            std::fwrite(encoded, 1, encodedSize, rmsFile_) != encodedSize) {
+          ++rmsWriteFailures_;
+          rmsHealthy_.store(false);
+          continue;
+        }
+        ++rmsWritten_;
+        rmsBytes_.fetch_add(encodedSize);
+        rmsBytesSinceSync_ += encodedSize;
+        continue;
+      }
       put64(payload, entry.imu.originMonoUs);
       put64(payload + 8, entry.imu.ingestPcMonoUs);
       payload[16] = static_cast<std::uint8_t>(entry.imu.rssiDbm);

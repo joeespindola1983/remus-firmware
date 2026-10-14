@@ -50,6 +50,7 @@ class ComputerRadioService final : public hal::IRadioEvents {
   void handlePaired(const Event&) noexcept;
   void handleBindAck(link::SourceEntry&, const link::DecodedFrame&) noexcept;
   void handleDataBatch(link::SourceEntry&, const Event&, const link::DecodedFrame&) noexcept;
+  void handleSourceManifest(link::SourceEntry&, const link::DecodedFrame&) noexcept;
   void sendBeacon() noexcept;
   void sendBind(link::SourceEntry&) noexcept;
   bool enqueue(const Event&) noexcept;

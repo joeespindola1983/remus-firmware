@@ -17,6 +17,7 @@ RECORD_HEADER_SIZE = 48
 RECORD_CRC_SIZE = 4
 MAX_RECORD_SIZE = 1024
 IMU_BATCH = 0x03
+SOURCE_MANIFEST = 0x0A
 
 
 def crc32c(data: bytes) -> int:
@@ -122,10 +123,22 @@ def decode_imu(record: Record):
                batch_seq, period_us, ax, ay, az, gx, gy, gz, flags)
 
 
+def decode_manifest(record: Record):
+    if len(record.payload) != 38:
+        raise RmsError(f"tamanho SOURCE_MANIFEST invalido no ordinal {record.ordinal}")
+    values = struct.unpack("<QIHBxHHHBxHBBHHHI", record.payload)
+    if values[0] != record.origin_id or values[1] != record.origin_boot_id:
+        raise RmsError(f"identidade SOURCE_MANIFEST invalida no ordinal {record.ordinal}")
+    return {"imu_model": values[2], "accel_fs_g": values[3], "gyro_fs_dps": values[4],
+            "dlpf_hz": values[5], "rate_hz": values[6], "lsb_per_g": values[12],
+            "lsb_per_dps_x10": values[13]}
+
+
 def inspect(path: Path, csv_path: Path | None) -> None:
     source_stats = defaultdict(lambda: {"batches": 0, "samples": 0, "gaps": 0,
                                         "next_batch": None, "next_sample": None})
     record_count = 0
+    manifests = {}
     writer = None
     output = None
     try:
@@ -135,11 +148,15 @@ def inspect(path: Path, csv_path: Path | None) -> None:
             writer.writerow(("source_role", "origin_id", "origin_boot_id", "batch_seq",
                              "sample_index", "origin_mono_us", "ingest_pc_mono_us",
                              "rssi_dbm", "nominal_period_us", "ax_raw", "ay_raw", "az_raw",
-                             "gx_raw", "gy_raw", "gz_raw", "flags"))
+                             "gx_raw", "gy_raw", "gz_raw", "ax_g", "ay_g", "az_g",
+                             "gx_dps", "gy_dps", "gz_dps", "flags"))
         with path.open("rb") as stream:
             header = read_header(stream)
             for record in records(stream):
                 record_count += 1
+                if record.record_type == SOURCE_MANIFEST:
+                    manifests[(record.origin_id, record.origin_boot_id)] = decode_manifest(record)
+                    continue
                 if record.record_type != IMU_BATCH:
                     continue
                 samples = list(decode_imu(record))
@@ -156,10 +173,16 @@ def inspect(path: Path, csv_path: Path | None) -> None:
                 stats["samples"] += len(samples)
                 if writer:
                     role = "computer" if record.origin_id == header.computer_id else "blade"
+                    manifest = manifests.get(key)
                     for sample in samples:
+                        axes = sample[6:12]
+                        converted = ("",) * 6
+                        if manifest and manifest["lsb_per_g"] and manifest["lsb_per_dps_x10"]:
+                            converted = tuple(value / manifest["lsb_per_g"] for value in axes[:3]) + \
+                                tuple(value * 10 / manifest["lsb_per_dps_x10"] for value in axes[3:])
                         writer.writerow((role, record.origin_id, record.origin_boot_id,
                                          sample[4], sample[0], sample[1], sample[2], sample[3],
-                                         sample[5], *sample[6:]))
+                                         sample[5], *axes, *converted, sample[12]))
     finally:
         if output:
             output.close()
@@ -171,6 +194,12 @@ def inspect(path: Path, csv_path: Path | None) -> None:
         role = "computer" if origin_id == header.computer_id else "blade"
         print(f"source={role} id={origin_id} boot={boot_id} batches={stats['batches']} "
               f"samples={stats['samples']} inferred_gaps={stats['gaps']}")
+        manifest = manifests.get((origin_id, boot_id))
+        if manifest:
+            print(f"  imu_model=0x{manifest['imu_model']:02X} accel=+/-{manifest['accel_fs_g']}g "
+                  f"gyro=+/-{manifest['gyro_fs_dps']}dps dlpf_hz={manifest['dlpf_hz']} "
+                  f"rate_hz={manifest['rate_hz']} lsb_per_g={manifest['lsb_per_g']} "
+                  f"lsb_per_dps_x10={manifest['lsb_per_dps_x10']}")
     if csv_path:
         print(f"CSV: {csv_path}")
 

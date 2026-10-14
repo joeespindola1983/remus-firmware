@@ -41,6 +41,9 @@ class SdDiagnosticLogger {
                        std::uint64_t ingestPcMonoUs, std::int8_t rssiDbm,
                        const std::uint8_t* dataBatchPayload,
                        std::size_t dataBatchPayloadSize) noexcept;
+  bool enqueueSourceManifest(std::uint64_t originId, std::uint32_t originBootId,
+                             const std::uint8_t* manifestPayload,
+                             std::size_t manifestPayloadSize) noexcept;
   SdDiagnosticLoggerStats stats() const noexcept;
   bool isReady() const noexcept { return ready_; }
   bool isRecording() const noexcept { return rmsHealthy_.load(); }
@@ -50,7 +53,7 @@ class SdDiagnosticLogger {
   static constexpr std::size_t kLineCapacity = 640;
   static constexpr std::uint32_t kTaskStackDepth = 2048;
 
-  enum class EntryKind : std::uint8_t { Diagnostic, ImuBatch };
+  enum class EntryKind : std::uint8_t { Diagnostic, ImuBatch, SourceManifest };
   struct ImuBatchEntry {
     std::uint64_t originId;
     std::uint32_t originBootId;
@@ -66,6 +69,11 @@ class SdDiagnosticLogger {
     union {
       char line[kLineCapacity];
       ImuBatchEntry imu;
+      struct {
+        std::uint64_t originId;
+        std::uint32_t originBootId;
+        std::uint8_t payload[34];
+      } manifest;
     };
     LogEntry() noexcept : line{} {}
   };
