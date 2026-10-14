@@ -72,6 +72,15 @@ extern "C" void app_main(void) {
     ESP_LOGE(kLogTag, "local IMU unavailable: error=%u detail=%lu; system remains operational",
              static_cast<unsigned>(acquisitionStatus.error),
              static_cast<unsigned long>(acquisitionStatus.detail));
+    if (sdLogger.isReady()) {
+      char failureDetails[112]{};
+      std::snprintf(failureDetails, sizeof(failureDetails),
+                    "error=%u detail=%lu sda=6 scl=5 address=0x68",
+                    static_cast<unsigned>(acquisitionStatus.error),
+                    static_cast<unsigned long>(acquisitionStatus.detail));
+      sdLogger.enqueue(remus::computer::DiagnosticLogLevel::Error,
+                       "local_imu_start_failed", failureDetails);
+    }
   }
 
   const remus::Status radioStatus = radioService.start();

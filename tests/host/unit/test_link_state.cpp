@@ -1,6 +1,7 @@
 #include <iostream>
 
 #include "remus/link/BladeLinkStateMachine.hpp"
+#include "remus/link/BindAcceptance.hpp"
 #include "remus/link/ComputerPeerStateMachine.hpp"
 #include "remus/link/RadioSupervisor.hpp"
 #include "remus/link/SourceRegistry.hpp"
@@ -71,6 +72,15 @@ void testComputerOnlyBindsAfterApplicationAck() {
   EXPECT(state.state() == remus::link::ComputerPeerState::Bound);
 }
 
+void testValidBindIsAcknowledgedWhenCaptureCannotStart() {
+  const auto decision = remus::link::decideBindAcceptance(
+      remus::Status::success(), true,
+      remus::Status::failure(remus::Error::IoFailure, 116));
+  EXPECT(decision.sendBindAck);
+  EXPECT(decision.reportCaptureFailure);
+  EXPECT(decision.bindResultCode == 0);
+}
+
 void testRegistryBoundsAndIdentityCollision() {
   remus::link::SourceRegistry registry;
   for (std::uint8_t index = 1; index <= 8; ++index) {
@@ -121,6 +131,7 @@ void testRadioSupervisorBacksOffPersistentFailure() {
 int main() {
   testBladeRequiresAuthenticatedSequence();
   testComputerOnlyBindsAfterApplicationAck();
+  testValidBindIsAcknowledgedWhenCaptureCannotStart();
   testRegistryBoundsAndIdentityCollision();
   testCandidateExpiryIsAbsolute();
   testTxSchedulerKeepsOneFrameInFlight();

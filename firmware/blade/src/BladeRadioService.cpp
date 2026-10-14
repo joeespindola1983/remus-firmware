@@ -6,6 +6,7 @@
 #include "esp_log.h"
 #include "esp_random.h"
 #include "esp_timer.h"
+#include "remus/link/BindAcceptance.hpp"
 #include "nvs_flash.h"
 #include "remus/link/MessageCodec.hpp"
 
@@ -130,16 +131,26 @@ void BladeRadioService::handleReceive(const Event& e) noexcept {
     return;
   link::Bind bind{};
   if (!link::MessageCodec::decode(frame.payload.data(), frame.payloadSize, bind).ok() ||
-      bind.bladeId != deviceId_ || bind.bladeBootId != bootId_ ||
-      !state_.onBindAccepted(bind.pcBootId, bind.sessionId, bind.bindEpoch).ok())
+      bind.bladeId != deviceId_ || bind.bladeBootId != bootId_)
     return;
-  if (bind.allowCapture != 0 &&
-      (acquisition_ == nullptr || !acquisition_->beginCapture(bind.sessionId).ok())) {
-    ESP_LOGE(kTag, "capture grant rejected recording_id=%llu",
-             static_cast<unsigned long long>(bind.sessionId));
-    return;
+  const Status bindStatus = state_.onBindAccepted(bind.pcBootId, bind.sessionId, bind.bindEpoch);
+  Status captureStatus = Status::success();
+  if (bindStatus.ok() && bind.allowCapture != 0) {
+    captureStatus = acquisition_ != nullptr
+                        ? acquisition_->beginCapture(bind.sessionId)
+                        : Status::failure(Error::NotReady);
   }
-  link::BindAck ack{deviceId_, bootId_, bind.pcBootId, bind.sessionId, bind.bindEpoch, 0};
+  const auto decision =
+      link::decideBindAcceptance(bindStatus, bind.allowCapture != 0, captureStatus);
+  if (!decision.sendBindAck) return;
+  if (decision.reportCaptureFailure) {
+    ESP_LOGE(kTag, "capture unavailable error=%u detail=%lu recording_id=%llu; link remains bound",
+             static_cast<unsigned>(captureStatus.error),
+             static_cast<unsigned long>(captureStatus.detail),
+             static_cast<unsigned long long>(bind.sessionId));
+  }
+  link::BindAck ack{deviceId_, bootId_, bind.pcBootId, bind.sessionId, bind.bindEpoch,
+                    decision.bindResultCode};
   std::uint8_t payload[link::kBindAckPayloadBytes]{};
   std::size_t n = 0;
   link::MessageCodec::encode(ack, payload, sizeof(payload), n);
