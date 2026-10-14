@@ -67,6 +67,21 @@ extern "C" void app_main(void) {
     sdLogger.enqueue(remus::computer::DiagnosticLogLevel::Info, "runtime_ready", "role=computer");
   }
 
+  // Wi-Fi/ESP-NOW initialization can occupy the ESP32-C3's single core for
+  // tens of milliseconds. Stabilize it before starting the 200 Hz sampler;
+  // acquisition still starts even when radio initialization fails.
+  const remus::Status radioStatus = radioService.start();
+  if (!radioStatus.ok()) {
+    ESP_LOGE(kLogTag, "radio unavailable: error=%u detail=%lu; provision remus NVS credentials",
+             static_cast<unsigned>(radioStatus.error),
+             static_cast<unsigned long>(radioStatus.detail));
+    if (sdLogger.isReady())
+      sdLogger.enqueue(remus::computer::DiagnosticLogLevel::Error, "radio_start_failed",
+                       "check_nvs_credentials=true");
+  } else {
+    ESP_LOGI(kLogTag, "Remus Computer M2 association service ready");
+  }
+
   const remus::Status acquisitionStatus = acquisitionService.start(recordingId);
   if (!acquisitionStatus.ok()) {
     ESP_LOGE(kLogTag, "local IMU unavailable: error=%u detail=%lu; system remains operational",
@@ -81,18 +96,14 @@ extern "C" void app_main(void) {
       sdLogger.enqueue(remus::computer::DiagnosticLogLevel::Error,
                        "local_imu_start_failed", failureDetails);
     }
-  }
-
-  const remus::Status radioStatus = radioService.start();
-  if (!radioStatus.ok()) {
-    ESP_LOGE(kLogTag, "radio unavailable: error=%u detail=%lu; provision remus NVS credentials",
-             static_cast<unsigned>(radioStatus.error),
-             static_cast<unsigned long>(radioStatus.detail));
-    if (sdLogger.isReady())
-      sdLogger.enqueue(remus::computer::DiagnosticLogLevel::Error, "radio_start_failed",
-                       "check_nvs_credentials=true");
-  } else {
-    ESP_LOGI(kLogTag, "Remus Computer M2 association service ready");
+  } else if (sdLogger.isReady()) {
+    char readyDetails[144]{};
+    std::snprintf(readyDetails, sizeof(readyDetails),
+                  "rate_hz=200 sda=6 scl=5 address=0x%02x identity=0x%02x mode=software_timer",
+                  static_cast<unsigned>(acquisitionService.detectedAddress()),
+                  static_cast<unsigned>(acquisitionService.detectedIdentity()));
+    sdLogger.enqueue(remus::computer::DiagnosticLogLevel::Info, "local_imu_ready",
+                     readyDetails);
   }
 
   for (;;) {

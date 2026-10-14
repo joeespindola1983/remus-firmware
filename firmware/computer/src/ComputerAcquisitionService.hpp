@@ -18,6 +18,8 @@ class ComputerAcquisitionService final : public acquisition::IAcquisitionSink {
   std::uint64_t batchCount() const noexcept { return batchCount_; }
   std::uint64_t sampleCount() const noexcept { return sampleCount_; }
   acquisition::SamplingMetrics metrics() const noexcept { return pipeline_.metrics(); }
+  std::uint8_t detectedAddress() const noexcept { return imu_.detectedAddress(); }
+  std::uint8_t detectedIdentity() const noexcept { return imu_.detectedIdentity(); }
 
  private:
   class EspTimerClock final : public IClock {
