@@ -204,7 +204,7 @@ extern "C" void app_main(void) {
                   static_cast<unsigned long long>(gps.bytes),
                   static_cast<unsigned long>(gps.recordsQueued),
                   static_cast<unsigned long>(sdLogStats.gpsWritten),
-                  static_cast<unsigned long>(gps.recordsDropped + sdLogStats.gpsDropped),
+                  static_cast<unsigned long>(sdLogStats.gpsDropped),
                   static_cast<unsigned long>(gps.coherentEpochs),
                   static_cast<unsigned long>(gps.checksumFailures),
                   static_cast<unsigned long>(gps.fixTransitions),
@@ -246,7 +246,7 @@ extern "C" void app_main(void) {
             sizeof(operationalProblems)))
       ESP_LOGW(kLogTag, "%s", operationalProblems);
     previousProblems = currentProblems;
-    const std::uint32_t gpsDropped = gps.recordsDropped + sdLogStats.gpsDropped;
+    const std::uint32_t gpsDropped = sdLogStats.gpsDropped;
     if (gpsDropped > previousGpsDropped)
       ESP_LOGW(kLogTag, "GPS: record_drop total=%lu", static_cast<unsigned long>(gpsDropped));
     previousGpsDropped = gpsDropped;

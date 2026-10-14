@@ -181,7 +181,7 @@ Blades are exercised together.
 | NMEA evidence | checksum, coordinates, fix quality, satellites, HDOP, speed/course, and UTC date parsing pass |
 | GPS writer isolation | Dedicated 16-entry queue; one GPS write after each IMU burst; GPS overflow cannot occupy the IMU/recovery queue |
 | Blade build | PASS; RAM 119,428 B (36.4%); app image 825,556 B; no GPS component compiled or linked |
-| Computer build | PASS; RAM 121,340 B (37.0%); app image 979,588 B (31.1% of 3 MiB) |
+| Computer build | PASS; RAM 121,340 B (37.0%); app image 979,604 B (31.1% of 3 MiB) |
 
 The Computer starts GPS only after RMS recording and local IMU startup. It uses
 UART1 at 9,600 baud with a 2 KiB RX buffer and initially requests 1 Hz. Missing

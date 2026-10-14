@@ -327,6 +327,7 @@ bool SdDiagnosticLogger::enqueueGpsFix(std::uint64_t originId,
     return false;
   }
   ++gpsQueued_;
+  ++rmsQueued_;
   updateHighWater(gpsQueueHighWater_, uxQueueMessagesWaiting(gpsQueue_));
   if (task_ != nullptr) xTaskNotifyGive(task_);
   return true;
