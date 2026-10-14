@@ -51,7 +51,7 @@ class SdDiagnosticLogger {
  private:
   static constexpr std::size_t kQueueCapacity = 32;
   static constexpr std::size_t kLineCapacity = 640;
-  static constexpr std::uint32_t kTaskStackWords = 2048;
+  static constexpr std::uint32_t kTaskStackBytes = 8192;
 
   enum class EntryKind : std::uint8_t { Diagnostic, ImuBatch, SourceManifest };
   struct ImuBatchEntry {
@@ -93,7 +93,7 @@ class SdDiagnosticLogger {
   StaticQueue_t queueBuffer_{};
   std::uint8_t queueStorage_[kQueueCapacity * sizeof(LogEntry)]{};
   StaticTask_t taskBuffer_{};
-  StackType_t taskStack_[kTaskStackWords]{};
+  StackType_t taskStack_[kTaskStackBytes]{};
   std::atomic<std::uint32_t> queued_{0};
   std::atomic<std::uint32_t> dropped_{0};
   std::atomic<std::uint32_t> writeFailures_{0};
