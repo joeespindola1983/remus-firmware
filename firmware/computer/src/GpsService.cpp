@@ -26,12 +26,24 @@ std::uint32_t ageMilliseconds(std::uint64_t now, std::uint64_t received) noexcep
 
 Status GpsService::start(std::uint64_t computerId, std::uint32_t bootId) noexcept {
   if (task_ != nullptr) return Status::success();
-  if (computerId == 0 || bootId == 0 || !storage_.isRecording())
+  if (storage_.isRecording() && (computerId == 0 || bootId == 0))
     return Status::failure(Error::InvalidArgument);
   computerId_ = computerId;
   bootId_ = bootId;
+  ESP_LOGI(kTag,
+           "GPS: START uart=1 rx_gpio=0 tx_gpio=1 baud=9600 rx_buffer=2048 "
+           "sd_ready=%s rms_recording=%s",
+           storage_.isReady() ? "yes" : "no", storage_.isRecording() ? "yes" : "no");
+  if (storage_.isReady())
+    storage_.enqueue(DiagnosticLogLevel::Info, "gps_start",
+                     "uart=1 rx_gpio=0 tx_gpio=1 baud=9600 rx_buffer_bytes=2048");
   const Status uartStatus = uart_.start(kBaudRate);
-  if (!uartStatus.ok()) return uartStatus;
+  if (!uartStatus.ok()) {
+    ESP_LOGE(kTag, "GPS: UART_ERROR error=%u detail=%lu",
+             static_cast<unsigned>(uartStatus.error),
+             static_cast<unsigned long>(uartStatus.detail));
+    return uartStatus;
+  }
   task_ = xTaskCreateStatic(taskEntry, "gps", kTaskStackBytes, this, 5,
                             taskStack_, &taskBuffer_);
   return task_ != nullptr ? Status::success() : Status::failure(Error::NotReady);
@@ -39,7 +51,7 @@ Status GpsService::start(std::uint64_t computerId, std::uint32_t bootId) noexcep
 
 GpsServiceStats GpsService::stats() const noexcept {
   return {bytes_.load(), recordsQueued_.load(), recordsDropped_.load(),
-          coherentEpochs_.load(), checksumFailures_.load(),
+          recordsSkippedNoStorage_.load(), coherentEpochs_.load(), checksumFailures_.load(),
           fixTransitions_.load()};
 }
 
@@ -73,21 +85,36 @@ bool GpsService::sendUbx(std::uint8_t messageClass, std::uint8_t messageId,
 }
 
 void GpsService::configureReceiver() noexcept {
-  struct MessageRate { std::uint8_t messageClass; std::uint8_t messageId; std::uint8_t rate; };
+  struct MessageRate {
+    const char* name;
+    std::uint8_t messageClass;
+    std::uint8_t messageId;
+    std::uint8_t rate;
+  };
   constexpr MessageRate messages[] = {
-      {0xF0, 0x00, 1},  // GGA: UTC-adjacent fix quality, satellites and HDOP.
-      {0xF0, 0x02, 0},  // GSA off.
-      {0xF0, 0x03, 5},  // GSV every five navigation epochs.
-      {0xF0, 0x04, 1},  // RMC: UTC date and fallback navigation.
-      {0xF0, 0x01, 0},  // GLL off.
-      {0xF0, 0x05, 0},  // VTG off.
-      {0x01, 0x02, 1},  // NAV-POSLLH.
-      {0x01, 0x12, 1},  // NAV-VELNED.
-      {0x01, 0x03, 1},  // NAV-STATUS.
+      {"GGA", 0xF0, 0x00, 1}, {"GSA", 0xF0, 0x02, 0},
+      {"GSV", 0xF0, 0x03, 5}, {"RMC", 0xF0, 0x04, 1},
+      {"GLL", 0xF0, 0x01, 0}, {"VTG", 0xF0, 0x05, 0},
+      {"NAV_POSLLH", 0x01, 0x02, 1}, {"NAV_VELNED", 0x01, 0x12, 1},
+      {"NAV_STATUS", 0x01, 0x03, 1},
   };
   for (const auto& message : messages) {
     const std::uint8_t payload[]{message.messageClass, message.messageId, message.rate};
-    (void)sendUbx(0x06, 0x01, payload, sizeof(payload));
+    const bool sent = sendUbx(0x06, 0x01, payload, sizeof(payload));
+    ESP_LOGI(kTag, "GPS: CFG name=%s class=0x%02x id=0x%02x rate=%u tx=%s",
+             message.name, static_cast<unsigned>(message.messageClass),
+             static_cast<unsigned>(message.messageId), static_cast<unsigned>(message.rate),
+             sent ? "OK" : "FAILED");
+    if (storage_.isReady()) {
+      char details[128]{};
+      std::snprintf(details, sizeof(details),
+                    "name=%s class=0x%02x id=0x%02x rate=%u tx=%s", message.name,
+                    static_cast<unsigned>(message.messageClass),
+                    static_cast<unsigned>(message.messageId),
+                    static_cast<unsigned>(message.rate), sent ? "OK" : "FAILED");
+      storage_.enqueue(sent ? DiagnosticLogLevel::Info : DiagnosticLogLevel::Warning,
+                       "gps_config_message", details);
+    }
     vTaskDelay(pdMS_TO_TICKS(20));
   }
   const std::uint8_t ratePayload[]{
@@ -96,9 +123,20 @@ void GpsService::configureReceiver() noexcept {
       0x01, 0x00,  // one navigation solution per measurement
       0x01, 0x00,  // align to GPS time
   };
-  (void)sendUbx(0x06, 0x08, ratePayload, sizeof(ratePayload));
+  const bool rateSent = sendUbx(0x06, 0x08, ratePayload, sizeof(ratePayload));
+  ESP_LOGI(kTag, "GPS: CFG name=RATE measurement_ms=%u navigation_rate=1 tx=%s",
+           static_cast<unsigned>(kMeasurementRateMs), rateSent ? "OK" : "FAILED");
+  if (storage_.isReady()) {
+    char details[128]{};
+    std::snprintf(details, sizeof(details),
+                  "name=RATE measurement_ms=%u navigation_rate=1 time_reference=GPS tx=%s",
+                  static_cast<unsigned>(kMeasurementRateMs), rateSent ? "OK" : "FAILED");
+    storage_.enqueue(rateSent ? DiagnosticLogLevel::Info : DiagnosticLogLevel::Warning,
+                     "gps_config_rate", details);
+  }
   vTaskDelay(pdMS_TO_TICKS(20));
-  (void)sendUbx(0x06, 0x08, nullptr, 0);  // Read back the effective rate.
+  const bool pollSent = sendUbx(0x06, 0x08, nullptr, 0);
+  ESP_LOGI(kTag, "GPS: CFG name=RATE_POLL tx=%s", pollSent ? "OK" : "FAILED");
 }
 
 void GpsService::reportFixState(bool valid, std::uint8_t fixQuality,
@@ -107,12 +145,52 @@ void GpsService::reportFixState(bool valid, std::uint8_t fixQuality,
   fixStateKnown_ = true;
   fixValid_ = valid;
   ++fixTransitions_;
+  if (storage_.isReady()) {
+    char details[96]{};
+    std::snprintf(details, sizeof(details), "valid=%s quality=%u satellites=%u",
+                  valid ? "yes" : "no", static_cast<unsigned>(fixQuality),
+                  static_cast<unsigned>(satellites));
+    storage_.enqueue(valid ? DiagnosticLogLevel::Info : DiagnosticLogLevel::Warning,
+                     valid ? "gps_fix_acquired" : "gps_fix_lost", details);
+  }
   if (valid)
     ESP_LOGI(kTag, "GPS: FIX quality=%u satellites=%u", static_cast<unsigned>(fixQuality),
              static_cast<unsigned>(satellites));
   else
     ESP_LOGW(kTag, "GPS: NO_FIX quality=%u satellites=%u", static_cast<unsigned>(fixQuality),
              static_cast<unsigned>(satellites));
+}
+
+void GpsService::persistFix(const storage::GpsFixPayload& fix) noexcept {
+  if (!storage_.isRecording()) {
+    ++recordsSkippedNoStorage_;
+    return;
+  }
+  if (storage_.enqueueGpsFix(computerId_, bootId_, sequence_++, fix)) ++recordsQueued_;
+  else ++recordsDropped_;
+}
+
+void GpsService::logSolution(const char* source, const storage::GpsFixPayload& fix,
+                             std::uint32_t gpsTimeOfWeekMs) noexcept {
+  if (!storage_.isReady()) return;
+  char details[384]{};
+  std::snprintf(details, sizeof(details),
+                "source=%s itow_ms=%lu pc_mono_us=%llu position_valid=%s "
+                "latitude_e7=%ld longitude_e7=%ld speed_mm_s=%lu course_cdeg=%u "
+                "satellites=%u fix_quality=%u hdop_x100=%u flags=0x%04x "
+                "utc_ms=%lld age_ms=%lu rms_recording=%s",
+                source, static_cast<unsigned long>(gpsTimeOfWeekMs),
+                static_cast<unsigned long long>(fix.pcMonotonicUs),
+                (fix.flags & gps::kGpsFlagPositionValid) != 0 ? "yes" : "no",
+                static_cast<long>(fix.latitudeE7), static_cast<long>(fix.longitudeE7),
+                static_cast<unsigned long>(fix.speedMillimetersPerSecond),
+                static_cast<unsigned>(fix.courseCentiDegrees),
+                static_cast<unsigned>(fix.satellites), static_cast<unsigned>(fix.fixQuality),
+                static_cast<unsigned>(fix.hdopX100), static_cast<unsigned>(fix.flags),
+                static_cast<long long>(fix.utcMilliseconds),
+                static_cast<unsigned long>(fix.ageMilliseconds),
+                storage_.isRecording() ? "yes" : "no");
+  storage_.enqueue(DiagnosticLogLevel::Info, "gps_solution", details);
 }
 
 void GpsService::publishUbx(const gps::NavigationEpoch& epoch,
@@ -156,8 +234,8 @@ void GpsService::publishUbx(const gps::NavigationEpoch& epoch,
       fix.flags |= gps::kGpsFlagUtcValid;
     }
   }
-  if (storage_.enqueueGpsFix(computerId_, bootId_, sequence_++, fix)) ++recordsQueued_;
-  else ++recordsDropped_;
+  persistFix(fix);
+  logSolution("UBX", fix, epoch.gpsTimeOfWeekMs);
   lastSolutionUs_ = now;
   lastUbxSolutionUs_ = now;
   staleReported_ = false;
@@ -192,8 +270,8 @@ void GpsService::publishNmea(const gps::NmeaSnapshot& nmea) noexcept {
     fix.hdopX100 = nmea.hdopX100;
     fix.flags |= gps::kGpsFlagHdopValid;
   }
-  if (storage_.enqueueGpsFix(computerId_, bootId_, sequence_++, fix)) ++recordsQueued_;
-  else ++recordsDropped_;
+  persistFix(fix);
+  logSolution("NMEA", fix, UINT32_MAX);
   lastSolutionUs_ = now;
   staleReported_ = false;
   reportFixState(nmea.positionValid, fix.fixQuality, fix.satellites);
@@ -235,6 +313,9 @@ void GpsService::run() noexcept {
                                            : now - lastSolutionUs_ > kStaleAfterUs;
     if (!staleReported_ && stale) {
       ESP_LOGW(kTag, "GPS: STALE");
+      if (storage_.isReady())
+        storage_.enqueue(DiagnosticLogLevel::Warning, "gps_stale",
+                         "no_navigation_solution_for_ms=3000");
       staleReported_ = true;
     }
     const gps::DecoderStats currentDecoder = ubx_.stats();
@@ -248,7 +329,9 @@ void GpsService::run() noexcept {
                     "bytes=%llu ubx_frames=%lu ubx_coherent_epochs=%lu "
                     "ubx_checksum_failures=%lu ubx_oversize=%lu nmea_sentences=%lu "
                     "nmea_checksum_failures=%lu cfg_ack_mask=0x%03x cfg_nak_mask=0x%03x "
-                    "measurement_rate_ms=%u navigation_rate=%u queued=%lu dropped=%lu",
+                    "measurement_rate_ms=%u navigation_rate=%u queued=%lu dropped=%lu "
+                    "skipped_no_storage=%lu fix_state=%s satellites=%u fix_quality=%u "
+                    "hdop_x100=%u",
                     static_cast<unsigned long long>(bytes_.load()),
                     static_cast<unsigned long>(decoder.frames),
                     static_cast<unsigned long>(decoder.coherentEpochs),
@@ -261,8 +344,15 @@ void GpsService::run() noexcept {
                     static_cast<unsigned>(ubx_.measurementRateMs()),
                     static_cast<unsigned>(ubx_.navigationRate()),
                     static_cast<unsigned long>(recordsQueued_.load()),
-                    static_cast<unsigned long>(recordsDropped_.load()));
-      storage_.enqueue(DiagnosticLogLevel::Info, "gps_health", details);
+                    static_cast<unsigned long>(recordsDropped_.load()),
+                    static_cast<unsigned long>(recordsSkippedNoStorage_.load()),
+                    fixStateKnown_ ? (fixValid_ ? "FIX" : "NO_FIX") : "UNKNOWN",
+                    static_cast<unsigned>(snapshot.satellites),
+                    static_cast<unsigned>(snapshot.fixQuality),
+                    static_cast<unsigned>(snapshot.hdopX100));
+      ESP_LOGI(kTag, "GPS: HEALTH %s", details);
+      if (storage_.isReady())
+        storage_.enqueue(DiagnosticLogLevel::Info, "gps_health", details);
     }
     if (count == 0) vTaskDelay(kPollInterval);
   }

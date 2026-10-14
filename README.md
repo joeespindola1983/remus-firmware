@@ -78,6 +78,13 @@ failure, or GPS backpressure never pauses local or remote IMU capture. Follow
 [`tests/hardware/runbooks/H4_GPS.md`](tests/hardware/runbooks/H4_GPS.md) before
 promoting the GPS feature branch.
 
+For the H4 development release, serial prints the firmware version, every GPS
+configuration command, fix transitions, stale state, and a five-second GPS
+health summary. When the microSD mounts, `remus_pc.log` additionally receives
+each decoded GPS solution and the detailed configuration/health counters. GPS
+UART diagnostics continue on serial if the card is absent; RMS1 evidence and
+the internal text log necessarily require a successfully mounted card.
+
 Before the first M2 bench test, provision each board's NVS using
 [`tools/provision_nvs.sh`](tools/provision_nvs.sh) and follow
 [`tests/hardware/runbooks/M2_ASSOCIATION.md`](tests/hardware/runbooks/M2_ASSOCIATION.md).

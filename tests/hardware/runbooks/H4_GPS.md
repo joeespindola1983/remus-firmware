@@ -29,10 +29,20 @@ sky view.
 
 Expected serial state lines:
 
+- `FIRMWARE: role=computer ... version=...` identifying the feature commit;
+- `GPS: START` with UART pins, baud, buffer, and SD/RMS availability;
+- one `GPS: CFG` result for every requested NMEA/UBX message and rate command;
 - `GPS: READY target_rate_hz=1` once after startup;
 - `GPS: NO_FIX` while acquisition is pending, then `GPS: FIX` after lock;
 - `GPS: STALE` only if complete navigation epochs stop for more than 3 s;
-- no coordinate stream and no periodic zero-filled GPS dump.
+- `GPS: HEALTH` every five seconds with byte/parser/configuration counters;
+- no coordinate stream in serial; full decoded solutions belong in
+  `remus_pc.log` and RMS1.
+
+If serial reports `SD diagnostic log unavailable` or `sdmmc_card_init failed`,
+GPS diagnostics still continue on serial but no internal log or RMS1 file can
+exist. Fix the card/power/wiring/mount problem before treating missing
+`remus_pc.log` as a GPS failure.
 
 Wait at least five minutes. Computer IMU batches and RMS checkpoints must keep
 advancing before, during, and after first fix. A receiver with no fix is a valid

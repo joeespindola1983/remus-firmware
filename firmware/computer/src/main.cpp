@@ -42,12 +42,15 @@ extern "C" void app_main(void) {
   static constexpr remus::platform::esp32::Mpu6050Config computerImu{
       GPIO_NUM_6, GPIO_NUM_5, GPIO_NUM_NC, 0x68, 400000};
   static remus::computer::ComputerAcquisitionService acquisitionService(computerImu);
+  const esp_app_desc_t* app = esp_app_get_description();
+  ESP_LOGI(kLogTag,
+           "FIRMWARE: role=computer project=%s version=%s idf=%s build_date=%s build_time=%s",
+           app->project_name, app->version, app->idf_ver, app->date, app->time);
   const remus::Status sdStatus = sdLogger.start();
   if (!sdStatus.ok()) {
     ESP_LOGE(kLogTag, "SD diagnostic log unavailable: error=%u detail=%lu",
              static_cast<unsigned>(sdStatus.error), static_cast<unsigned long>(sdStatus.detail));
   } else {
-    const esp_app_desc_t* app = esp_app_get_description();
     static char bootDetails[320]{};
     std::snprintf(bootDetails, sizeof(bootDetails),
                   "role=computer reset_reason=%u project=%s version=%s idf=%s "
@@ -96,7 +99,6 @@ extern "C" void app_main(void) {
   }
 
   if (sdLogger.isReady() && radioStatus.ok()) {
-    const esp_app_desc_t* app = esp_app_get_description();
     const remus::Status rmsStatus = sdLogger.startRecording(
         recordingId, radioService.computerId(), radioService.bootId(), radioService.networkId(),
         fnv1a(app->version), fnv1a("remus-computer-prototype1"));
@@ -139,9 +141,7 @@ extern "C" void app_main(void) {
   }
 
   const remus::Status gpsStatus =
-      sdLogger.isRecording()
-          ? gpsService.start(radioService.computerId(), radioService.bootId())
-          : remus::Status::failure(remus::Error::StorageUnavailable);
+      gpsService.start(radioService.computerId(), radioService.bootId());
   if (!gpsStatus.ok()) {
     ESP_LOGW(kLogTag, "GPS: UNAVAILABLE error=%u detail=%lu; IMU capture remains operational",
              static_cast<unsigned>(gpsStatus.error),

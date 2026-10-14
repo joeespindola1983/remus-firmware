@@ -16,6 +16,7 @@ struct GpsServiceStats {
   std::uint64_t bytes{0};
   std::uint32_t recordsQueued{0};
   std::uint32_t recordsDropped{0};
+  std::uint32_t recordsSkippedNoStorage{0};
   std::uint32_t coherentEpochs{0};
   std::uint32_t checksumFailures{0};
   std::uint32_t fixTransitions{0};
@@ -36,6 +37,9 @@ class GpsService {
   void publishUbx(const gps::NavigationEpoch& epoch,
                   const gps::NmeaSnapshot& nmea) noexcept;
   void publishNmea(const gps::NmeaSnapshot& nmea) noexcept;
+  void persistFix(const storage::GpsFixPayload& fix) noexcept;
+  void logSolution(const char* source, const storage::GpsFixPayload& fix,
+                   std::uint32_t gpsTimeOfWeekMs) noexcept;
   void reportFixState(bool valid, std::uint8_t fixQuality,
                       std::uint8_t satellites) noexcept;
 
@@ -60,6 +64,7 @@ class GpsService {
   std::atomic<std::uint64_t> bytes_{0};
   std::atomic<std::uint32_t> recordsQueued_{0};
   std::atomic<std::uint32_t> recordsDropped_{0};
+  std::atomic<std::uint32_t> recordsSkippedNoStorage_{0};
   std::atomic<std::uint32_t> coherentEpochs_{0};
   std::atomic<std::uint32_t> checksumFailures_{0};
   std::atomic<std::uint32_t> fixTransitions_{0};
