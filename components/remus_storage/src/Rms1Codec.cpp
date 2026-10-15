@@ -21,6 +21,15 @@ std::uint32_t get32(const std::uint8_t* p) noexcept {
          (static_cast<std::uint32_t>(p[2]) << 16) |
          (static_cast<std::uint32_t>(p[3]) << 24);
 }
+std::uint16_t get16(const std::uint8_t* p) noexcept {
+  return static_cast<std::uint16_t>(p[0]) | (static_cast<std::uint16_t>(p[1]) << 8);
+}
+std::uint64_t get64(const std::uint8_t* p) noexcept {
+  std::uint64_t value = 0;
+  for (unsigned index = 0; index < 8; ++index)
+    value |= static_cast<std::uint64_t>(p[index]) << (index * 8);
+  return value;
+}
 }  // namespace
 
 std::uint32_t crc32c(const std::uint8_t* data, std::size_t size) noexcept {
@@ -80,6 +89,43 @@ Status encodeRecord(const Rms1Record& value, std::uint8_t* out, std::size_t capa
   put32(out + total - kRms1RecordCrcBytes, crc32c(out, total - kRms1RecordCrcBytes));
   encodedBytes = total;
   return Status::success();
+}
+
+Status encodeGpsFixPayload(const GpsFixPayload& value, std::uint8_t* out,
+                           std::size_t capacity) noexcept {
+  if (out == nullptr || capacity < kGpsFixPayloadBytes || value.pcMonotonicUs == 0)
+    return Status::failure(Error::InvalidArgument);
+  put64(out, value.pcMonotonicUs);
+  put32(out + 8, static_cast<std::uint32_t>(value.latitudeE7));
+  put32(out + 12, static_cast<std::uint32_t>(value.longitudeE7));
+  put32(out + 16, value.speedMillimetersPerSecond);
+  put16(out + 20, value.courseCentiDegrees);
+  out[22] = value.satellites;
+  out[23] = value.fixQuality;
+  put16(out + 24, value.hdopX100);
+  put16(out + 26, value.flags);
+  put64(out + 28, static_cast<std::uint64_t>(value.utcMilliseconds));
+  put32(out + 36, value.ageMilliseconds);
+  return Status::success();
+}
+
+Status decodeGpsFixPayload(const std::uint8_t* source, std::size_t size,
+                           GpsFixPayload& out) noexcept {
+  if (source == nullptr || size != kGpsFixPayloadBytes)
+    return Status::failure(Error::InvalidArgument);
+  out.pcMonotonicUs = get64(source);
+  out.latitudeE7 = static_cast<std::int32_t>(get32(source + 8));
+  out.longitudeE7 = static_cast<std::int32_t>(get32(source + 12));
+  out.speedMillimetersPerSecond = get32(source + 16);
+  out.courseCentiDegrees = get16(source + 20);
+  out.satellites = source[22];
+  out.fixQuality = source[23];
+  out.hdopX100 = get16(source + 24);
+  out.flags = get16(source + 26);
+  out.utcMilliseconds = static_cast<std::int64_t>(get64(source + 28));
+  out.ageMilliseconds = get32(source + 36);
+  return out.pcMonotonicUs == 0 ? Status::failure(Error::InvalidArgument)
+                                : Status::success();
 }
 
 Status recoverRms1Prefix(const std::uint8_t* data, std::size_t size,

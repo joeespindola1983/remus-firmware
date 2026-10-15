@@ -1,4 +1,4 @@
-# Firmware architecture through M4
+# Firmware architecture through the M5 GPS slice
 
 The Remus firmware produces two independent images from one repository:
 
@@ -12,8 +12,8 @@ remus_link -> remus_hal::{ICrypto,IRadio}
 
 M0 establishes the product contracts. `remus_core`, `remus_hal`, and
 `remus_diagnostics` are host-buildable and contain no ESP-IDF or FreeRTOS
-headers. The Computer composition root additionally owns an ESP-IDF microSD
-diagnostic adapter; the Blade has no storage dependency.
+headers. The Computer composition root additionally owns ESP-IDF microSD and
+GPS UART adapters; the Blade has neither storage nor GPS dependencies.
 
 ## Identity and evidence
 
@@ -46,10 +46,13 @@ handles so stale or duplicate releases fail explicitly.
 The Computer's microSD log is an engineering observability channel, not a
 recording/session store and not RMS1 evidence. Producers enqueue fixed-size
 records without blocking. A low-priority writer task owns FAT file I/O, flushes
-and synchronizes each accepted line, and rotates two 512 KiB text segments.
-Queue overflow and I/O failure are counted and remain visible in the serial
-health heartbeat. Missing or faulty storage degrades diagnostics only; it does
-not prevent the Computer runtime from starting.
+and synchronizes accepted lines at a bounded periodic checkpoint, and rotates
+two 16 MiB text segments.
+Routine samples and throughput belong in RMS1, not in the text log. Serial and
+the diagnostic log emit startup, connection, disconnection, state transitions
+and deltas when a fault counter increases. Healthy periodic snapshots remain
+silent. Missing or faulty storage degrades diagnostics only; it does not prevent
+the Computer runtime from starting.
 
 Log records contain monotonic time, severity, event name, and bounded details.
 Secrets, provisioning keys, stable identities, and raw evidence do not belong
@@ -71,6 +74,10 @@ transitions. `TxScheduler` permits one SDK send in flight, `SourceRegistry`
 bounds the Computer to eight sources, and `RadioSupervisor` turns isolated and
 persistent failures into explicit policy actions. MAC delivery never marks a
 Blade bound; only a valid pair-authenticated `BIND_ACK` can do that.
+The callback queue reserves capacity for the single in-flight TX completion, so
+an RX burst cannot manufacture a TX timeout. Recovery restarts the ESP-NOW link
+layer and restores its peers without cycling the Wi-Fi driver that competes with
+the 200 Hz acquisition task.
 
 ## M3 acquisition and M4 recovery boundary
 
@@ -91,6 +98,21 @@ checkpoint watermark only after successful `fflush` and `fsync`. An
 irrecoverable range is first appended as an RMS1 `GAP` record; therefore a
 radio ACK cannot silently convert missing evidence into durable data.
 
-There is still no GPS, explicit START/STOP session lifecycle, clean session
-finalization, recovery-on-boot, OTA, or time synchronization. `FakeCrypto`
-remains host-test-only.
+## M5 GPS isolation boundary
+
+The Computer alone links `remus_gps` and `remus_platform_esp32_gps`. The NEO-6M
+UART adapter uses a 2 KiB receive buffer. Portable incremental decoders validate
+NMEA and UBX checksums; a UBX navigation epoch is emitted only when POSLLH,
+VELNED, and STATUS share the same receiver time-of-week. NMEA provides UTC,
+satellite/HDOP metadata and a fallback if coherent UBX never becomes available.
+
+GPS runs at priority 5 after the 200 Hz Computer IMU task is active. Its
+dedicated 16-entry writer queue is drained at most once after each RMS IMU
+burst. A full GPS queue drops and counts GPS evidence without occupying the
+96-entry IMU/recovery queue. Detailed receiver counters go to the bounded SD
+diagnostic log; serial output is limited to readiness, fix-state transitions,
+staleness, and newly observed drops.
+
+There is still no explicit START/STOP session lifecycle, clean session
+finalization, recovery-on-boot, OTA, UTC_ANCHOR record, or time synchronization.
+`FakeCrypto` remains host-test-only.

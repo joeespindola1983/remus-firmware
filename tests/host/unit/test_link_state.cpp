@@ -4,6 +4,7 @@
 #include "remus/link/BindAcceptance.hpp"
 #include "remus/link/ComputerPeerStateMachine.hpp"
 #include "remus/link/RadioSupervisor.hpp"
+#include "remus/hal/RadioEventAdmission.hpp"
 #include "remus/link/SourceRegistry.hpp"
 #include "remus/link/TxScheduler.hpp"
 
@@ -187,6 +188,15 @@ void testTxSchedulerRequiresDriverRecoveryAfterMissingCallback() {
   EXPECT(radio.lastDestination == mac(2));
 }
 
+void testRadioQueueReservesCapacityForSendCompletion() {
+  using remus::hal::canAdmitRadioReceiveEvent;
+  EXPECT(canAdmitRadioReceiveEvent(0, 32, 1));
+  EXPECT(canAdmitRadioReceiveEvent(30, 32, 1));
+  EXPECT(!canAdmitRadioReceiveEvent(31, 32, 1));
+  EXPECT(!canAdmitRadioReceiveEvent(32, 32, 1));
+  EXPECT(!canAdmitRadioReceiveEvent(0, 0, 1));
+}
+
 void testRadioSupervisorBacksOffPersistentFailure() {
   remus::link::RadioSupervisor supervisor;
   supervisor.observe(remus::link::RadioHealthEvent::DriverFailure, 100);
@@ -212,6 +222,7 @@ int main() {
   testRegistryCountsOnlyFullyBoundBlades();
   testTxSchedulerKeepsOneFrameInFlight();
   testTxSchedulerRequiresDriverRecoveryAfterMissingCallback();
+  testRadioQueueReservesCapacityForSendCompletion();
   testRadioSupervisorBacksOffPersistentFailure();
   return failures == 0 ? 0 : 1;
 }

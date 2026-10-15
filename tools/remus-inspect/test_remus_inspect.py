@@ -81,6 +81,24 @@ class InspectorTest(unittest.TestCase):
         with self.assertRaises(MODULE.RmsError):
             MODULE.decode_gap(record)
 
+    def test_decodes_gps_fix(self):
+        payload = struct.pack("<QiiIHBBHHqI", 123456, -234567890, -456789012,
+                              3210, 12345, 9, 1, 85, 0x7F,
+                              1792000000123, 12)
+        record = MODULE.Record(64, MODULE.GPS_FIX, 1, 123456, 22, 33, 7, payload)
+        fix = MODULE.decode_gps(record)
+        self.assertEqual(fix["latitude_e7"], -234567890)
+        self.assertEqual(fix["satellites"], 9)
+        self.assertEqual(fix["flags"], 0x7F)
+
+    def test_rejects_invalid_gps_coordinate(self):
+        payload = struct.pack("<QiiIHBBHHqI", 123456, 900000001, 0,
+                              0xFFFFFFFF, 0xFFFF, 0xFF, 0, 0xFFFF,
+                              0x02, 0, 0)
+        record = MODULE.Record(64, MODULE.GPS_FIX, 1, 123456, 22, 33, 7, payload)
+        with self.assertRaises(MODULE.RmsError):
+            MODULE.decode_gps(record)
+
 
 if __name__ == "__main__":
     unittest.main()

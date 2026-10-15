@@ -134,8 +134,7 @@ Status BladeRadioService::recoverRadio(NativeTimestampUs nowUs) noexcept {
   std::array<std::uint8_t, 16> pmk{};
   Status status = link::derivePmk(crypto_, secret_.data(), secret_.size(), networkId_, pmk);
   if (!status.ok()) return status;
-  radio_.stop();
-  status = radio_.start(1);
+  status = radio_.restartLinkLayer();
   if (status.ok()) status = radio_.setPrimaryMasterKey(pmk.data());
   if (status.ok() && state_.state() != link::BladeLinkState::Discovering)
     status = radio_.addPeer(computerAddress_, pairKeys_.pairLmk.data());

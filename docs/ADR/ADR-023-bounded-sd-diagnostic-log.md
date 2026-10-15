@@ -1,6 +1,6 @@
 # ADR-023: Bounded Computer microSD diagnostic log
 
-- Status: accepted
+- Status: superseded by ADR-024
 - Date: 2026-10-13
 
 ## Context

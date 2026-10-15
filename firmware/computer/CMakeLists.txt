@@ -10,8 +10,10 @@ list(APPEND EXTRA_COMPONENT_DIRS
   "${CMAKE_CURRENT_LIST_DIR}/../../components/remus_diagnostics"
   "${CMAKE_CURRENT_LIST_DIR}/../../components/remus_acquisition"
   "${CMAKE_CURRENT_LIST_DIR}/../../components/remus_link"
+  "${CMAKE_CURRENT_LIST_DIR}/../../components/remus_gps"
   "${CMAKE_CURRENT_LIST_DIR}/../../components/remus_storage"
   "${CMAKE_CURRENT_LIST_DIR}/../../components/remus_platform_esp32"
+  "${CMAKE_CURRENT_LIST_DIR}/../../components/remus_platform_esp32_gps"
 )
 list(REMOVE_DUPLICATES EXTRA_COMPONENT_DIRS)
 
