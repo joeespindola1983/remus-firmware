@@ -22,26 +22,6 @@ bool appendIncrease(char* output, std::size_t capacity, std::size_t& used,
 
 }  // namespace
 
-bool formatImuRawPreview(const char* source, std::uint32_t bootId,
-                         const ImuRawPreview& sample, char* output,
-                         std::size_t outputCapacity) noexcept {
-  if (source == nullptr || source[0] == '\0' || output == nullptr || outputCapacity == 0)
-    return false;
-  const int written = bootId == 0
-                          ? std::snprintf(output, outputCapacity,
-                                          "IMU %s raw ax=%d ay=%d az=%d gx=%d gy=%d gz=%d "
-                                          "flags=0x%04x",
-                                          source, sample.ax, sample.ay, sample.az, sample.gx,
-                                          sample.gy, sample.gz, sample.flags)
-                          : std::snprintf(output, outputCapacity,
-                                          "IMU %s boot=%08lx raw ax=%d ay=%d az=%d gx=%d gy=%d "
-                                          "gz=%d flags=0x%04x",
-                                          source, static_cast<unsigned long>(bootId), sample.ax,
-                                          sample.ay, sample.az, sample.gx, sample.gy, sample.gz,
-                                          sample.flags);
-  return written > 0 && static_cast<std::size_t>(written) < outputCapacity;
-}
-
 bool formatNewOperationalProblems(const OperationalProblemCounters& previous,
                                   const OperationalProblemCounters& current,
                                   char* output, std::size_t outputCapacity) noexcept {
@@ -72,6 +52,12 @@ bool formatNewOperationalProblems(const OperationalProblemCounters& previous,
   REMUS_APPEND_PROBLEM(duplicateBatches, "duplicate_batches");
   REMUS_APPEND_PROBLEM(outsideWindowBatches, "outside_window_batches");
   REMUS_APPEND_PROBLEM(unrecoverableGaps, "unrecoverable_gaps");
+  REMUS_APPEND_PROBLEM(gpsChecksumFailures, "gps_checksum_failures");
+  REMUS_APPEND_PROBLEM(gpsDecoderOverflows, "gps_decoder_overflows");
+  REMUS_APPEND_PROBLEM(gpsRecordDrops, "gps_record_drops");
+  REMUS_APPEND_PROBLEM(replayOverflows, "replay_overflows");
+  REMUS_APPEND_PROBLEM(replayUnavailable, "replay_unavailable");
+  REMUS_APPEND_PROBLEM(gapNotices, "gap_notices");
 #undef REMUS_APPEND_PROBLEM
 
   if (!found) output[0] = '\0';

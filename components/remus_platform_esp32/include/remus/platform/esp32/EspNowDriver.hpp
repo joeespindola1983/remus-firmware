@@ -23,6 +23,7 @@ class EspNowDriver final : public hal::IRadio {
   Status addPeer(const MacAddress&, const std::uint8_t linkKey[16]) noexcept override;
   Status removePeer(const MacAddress&) noexcept override;
   Status requestSend(const MacAddress&, const std::uint8_t*, std::size_t) noexcept override;
+  Status restartLinkLayer() noexcept;
   Status stop() noexcept override;
   EspNowDriverStats stats() const noexcept {
     return {callbackEvents_.load(), callbackDrops_.load()};

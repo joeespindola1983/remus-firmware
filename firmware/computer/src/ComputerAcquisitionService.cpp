@@ -4,7 +4,6 @@
 
 #include "esp_log.h"
 #include "esp_timer.h"
-#include "remus/diagnostics/OperationalSerial.hpp"
 #include "remus/link/MessageCodec.hpp"
 #include "remus/link/SourceManifestBuilder.hpp"
 
@@ -81,14 +80,6 @@ Status ComputerAcquisitionService::onBatchReady(
     return Status::failure(Error::QueueFull);
   ++batchCount_;
   sampleCount_ += batch.count;
-  if (batch.count > 0 && diagnostics::shouldEmitImuPreview(batchCount_)) {
-    const auto& raw = batch.samples[batch.count - 1].raw;
-    const diagnostics::ImuRawPreview preview{raw.ax, raw.ay, raw.az, raw.gx, raw.gy, raw.gz,
-                                             batch.samples[batch.count - 1].flags};
-    char line[160]{};
-    if (diagnostics::formatImuRawPreview("PC", 0, preview, line, sizeof(line)))
-      ESP_LOGI(kTag, "%s", line);
-  }
   return Status::success();
 }
 

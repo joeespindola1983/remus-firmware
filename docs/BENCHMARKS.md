@@ -165,3 +165,52 @@ diagnostics, selective replay, durable RMS1 checkpointing, and Blade
 reassociation after a new boot identity at host-test level. GPS, controlled
 Blade restart evidence, induced recoverable/unrecoverable RF loss, clean
 session finalization, and eight physical encrypted peers remain pending.
+
+## Computer GPS and radio endurance for v1.1.0-alpha.1 — 2026-10-15
+
+The Computer ran the release candidate for 20 min 08 s with the NEO-6M in
+continuous `normal` mode at 1 Hz and the local IMU at 200 Hz. The RMS1 artifact
+was validated with `tools/remus-inspect/remus_inspect.py`; stable device and
+recording identities are intentionally omitted.
+
+| Evidence | Result |
+|---|---:|
+| Computer IMU samples | 241,530 |
+| Computer IMU batches | 24,153 |
+| Inferred or explicit IMU gaps | 0 |
+| GPS records | 1,208 |
+| Coherent UBX epochs | 1,207 |
+| GPS stale transitions | 0 |
+| TX callback timeouts | 0 |
+| SD write failures | 0 |
+
+The indoor test intentionally did not qualify positional accuracy because no
+position fix was available. It qualifies continuous receiver output, bounded
+RMS1 storage, uninterrupted 200 Hz acquisition, and the ESP-NOW callback-queue
+reservation/recovery safeguard beyond the earlier failure time of 952 s.
+
+## M5 GPS software baseline — 2026-10-14
+
+The isolated `feature/m5-gps` branch adds Computer-only NEO-6M capture without
+changing the Blade target dependency graph. This is software evidence; H4
+remains pending until the receiver, SD card, Computer IMU, and two physical
+Blades are exercised together.
+
+| Item | Observed result |
+|---|---|
+| Host CTest | PASS; 14/14 tests |
+| RMS1 inspector unit tests | PASS; 8/8 tests |
+| UBX evidence | POSLLH/VELNED/STATUS emitted only for equal GPS time-of-week; checksum and mismatched epochs rejected |
+| NMEA evidence | checksum, coordinates, fix quality, satellites, HDOP, speed/course, and UTC date parsing pass |
+| GPS writer isolation | Dedicated 16-entry queue; one GPS write after each IMU burst; GPS overflow cannot occupy the IMU/recovery queue |
+| Blade build | PASS; RAM 119,428 B (36.4%); app image 825,556 B; no GPS component compiled or linked |
+| Computer build | PASS; RAM 121,340 B (37.0%); app image 982,142 B (31.2% of 3 MiB) |
+
+The Computer starts GPS only after RMS recording and local IMU startup. It uses
+UART1 at 9,600 baud with a 2 KiB RX buffer and initially requests 1 Hz. Missing
+UBX acknowledgements do not force a downgrade: coherent navigation epochs and
+CFG-RATE readback are the runtime evidence. Serial output contains only GPS
+readiness/fix/stale/drop state; detailed counters and all GPS_FIX values remain
+on the SD card. Execute
+[`tests/hardware/runbooks/H4_GPS.md`](../tests/hardware/runbooks/H4_GPS.md) before
+promotion or any 5 Hz experiment.

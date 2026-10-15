@@ -768,7 +768,7 @@ Calcula período real/nominal, `sampledAtUs`, histograma resumido de jitter e pe
 
 ### `NmeaDecoder`
 
-Parser incremental de sentença, valida checksum e limites; não pressupõe que módulo consiga 5 Hz estável. Inicialmente GPS **1 Hz** com NEO-6M até medir estabilidade; permitir perfil configurado 5 Hz somente após teste, e depois adaptador NEO-M9N de 10–25 Hz conforme dispositivo real. Não confundir GPS sem fix com perda do rádio ESP-NOW.
+Parser incremental de sentença, valida checksum e limites; não pressupõe que o módulo consiga 5 Hz estável. O NEO-6M inicia em `normal` contínuo a **1 Hz**, pois o ensaio físico mostrou que `normalPowerSaving` pode confirmar `CFG-RXM` e ainda assim interromper épocas de navegação. `normalPowerSaving` permanece disponível para qualificação explícita de receptores compatíveis, e um watchdog retorna a `normal` se a navegação ficar stale. `dynamicArmed` usa soluções UBX coerentes a **5 Hz**, mantendo GGA/RMC/GSV a 1 Hz para caber na UART de 9600 baud. `dynamicArmed` expira após três minutos e pressão, perda ou falha de escrita na fila GPS provoca retorno imediato a `normal`. Uma troca só é efetiva após ACK e leitura de volta de `CFG-RATE`; três falhas de configuração também fazem fallback para `normal` a 1 Hz, preservando evidência. A promoção automática por movimento pertence à etapa posterior. Um adaptador NEO-M9N de 10–25 Hz permanece futuro. Não confundir GPS sem fix com perda do rádio ESP-NOW.
 
 ### `GpsFix`
 
@@ -1261,6 +1261,11 @@ O ESP-NOW fornece callback de conclusão assíncrono; não traz um ID de transa�
 5. Após janela de quiescência/recuperação controlada, liberar TX com geração nova; callback de geração anterior não pode concluir um frame novo. **Se o SDK não fornecer discriminação suficiente, o único gate seguro é restabelecer a instância do driver antes de reutilizar o slot**, com RX e aquisição independentes; documentar esse limite, não assumir token mágico no callback.
 6. Registrar tempo entre `requestSend` e callback e motivo de eventual reset de rádio.
 
+As filas de callback reservam pelo menos um slot para a conclusão do único TX em voo;
+rajadas RX são descartadas e contabilizadas antes de consumir essa reserva. Quando a
+instância ESP-NOW precisa ser restabelecida, a recuperação reinicializa ESP-NOW,
+callbacks e peers, mas preserva o driver Wi-Fi ativo para não bloquear a aquisição IMU.
+
 **Teste obrigatório:** forçar callback atrasado da transmissão A depois do timeout e antes/depois de B; provar que o estado/ACK de B não recebe o resultado de A. Callback MAC bem-sucedido não significa `DATA` gravado.
 
 ## 11.4 Redução de colisões para oito emissores
@@ -1541,7 +1546,7 @@ O estimador usa regressão linear robusta de janela deslizante (rejeitando outli
 
 - GPS não é a fonte de clock da IMU; fornece âncora UTC e posição global.
 - Registro de GPS inclui `pcMonotonicUs`, UTC quando válido, satélites, velocidade, posição e flags de qualidade.
-- GPS NEO-6M opera nominalmente a **1 Hz** no MVP para não sobrecarregar UART ou misturar falhas do GPS com as do rádio. Subir para 5 Hz apenas após teste de estabilidade.
+- GPS NEO-6M opera por padrão em `normal` contínuo a **1 Hz**. `normalPowerSaving` exige qualificação explícita do receptor e `dynamicArmed` fornece 5 Hz por intervalo limitado; pressão de gravação, expiração, navegação stale ou falha de confirmação recuam para `normal` a 1 Hz.
 - Se o GPS perder o fix, o Computer continua gravando perfeitamente a IMU de casco e todos os Blades, marcando o record `SESSION_EVENT(STORAGE_RECOVERED/GPS_LOST)`.
 - O cálculo de split e ritmo pertence ao pipeline analítico pós-sessão, não ao callback de GPS.
 
@@ -1582,7 +1587,7 @@ Cotas de CPU, watchdog e stack high-water por task serão medidos. Um adaptador 
 |---|---|---|---:|---|
 | Blade sample→batch | IMU | BatchBuilder | 32 amostras | contar índices não processados; não bloquear IMU |
 | Blade replay ring | BatchBuilder | TX/replay | 256 batches | descartar mais antigo e sinalizar GAP |
-| Blade RX event | Wi-Fi callback | BladeRxTask | 32 eventos | descartar frame novo, contar |
+| Blade RX/TX event | Wi-Fi callback | BladeRxTask | 32 eventos | reservar 1 slot para conclusão TX; descartar RX novo, contar |
 | Blade TX control | FSM | TX dispatcher | 16 eventos | coalescer HELLO/health; retry controle |
 | PC RX pool | Wi-Fi callback | RxProcessor/ingest | 192 slots × 256 B | descartar novo, contador por causa |
 | PC RxQueue | Wi-Fi callback | RxProcessor | 192 handles | descartar novo se pool/queue sem espaço |

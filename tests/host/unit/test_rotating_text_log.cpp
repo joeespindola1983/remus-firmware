@@ -5,6 +5,7 @@
 
 #include <unistd.h>
 
+#include "remus/diagnostics/ComputerDiagnosticLogProfile.hpp"
 #include "remus/diagnostics/RotatingTextLog.hpp"
 
 namespace {
@@ -23,6 +24,13 @@ void expect(bool condition, const char* expression, int line) {
 std::string readAll(const std::filesystem::path& path) {
   std::ifstream input(path);
   return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+}
+
+void testComputerProfileRetainsExtendedBoundedHistory() {
+  using remus::diagnostics::ComputerDiagnosticLogProfile;
+  EXPECT(ComputerDiagnosticLogProfile::segmentBytes >= 16U * 1024U * 1024U);
+  EXPECT(ComputerDiagnosticLogProfile::segmentCount == 2);
+  EXPECT(ComputerDiagnosticLogProfile::retentionBytes() >= 32U * 1024U * 1024U);
 }
 
 void testRotationPreservesNewestBoundedSegments() {
@@ -141,6 +149,7 @@ void testCanDeferDurabilityToPeriodicCheckpoint() {
 }  // namespace
 
 int main() {
+  testComputerProfileRetainsExtendedBoundedHistory();
   testRotationPreservesNewestBoundedSegments();
   testRejectsOversizedLine();
   testReopenAppendsExistingLog();

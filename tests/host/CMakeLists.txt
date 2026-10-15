@@ -146,6 +146,21 @@ target_link_libraries(test_rms1 PRIVATE remus_storage)
 target_compile_options(test_rms1 PRIVATE -Wall -Wextra -Wpedantic -Werror)
 add_test(NAME rms1 COMMAND test_rms1)
 
+add_library(remus_gps STATIC
+  "${REPO_ROOT}/components/remus_gps/src/NmeaDecoder.cpp"
+  "${REPO_ROOT}/components/remus_gps/src/UbxNavigationDecoder.cpp"
+)
+target_include_directories(remus_gps PUBLIC
+  "${REPO_ROOT}/components/remus_gps/include"
+)
+target_link_libraries(remus_gps PUBLIC remus_core)
+target_compile_options(remus_gps PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
+add_executable(test_gps unit/test_gps.cpp)
+target_link_libraries(test_gps PRIVATE remus_gps remus_storage)
+target_compile_options(test_gps PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_test(NAME gps COMMAND test_gps)
+
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 add_test(NAME remus_inspect
   COMMAND "${Python3_EXECUTABLE}" "${REPO_ROOT}/tools/remus-inspect/test_remus_inspect.py"

@@ -6,6 +6,7 @@
 #include "esp_netif.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
+#include "remus/hal/RadioEventAdmission.hpp"
 
 namespace remus::platform::esp32 {
 namespace {
@@ -116,6 +117,36 @@ Status EspNowDriver::requestSend(const MacAddress& destination, const std::uint8
   return failure(Error::NotReady, result);
 }
 
+Status EspNowDriver::restartLinkLayer() noexcept {
+  if (!started_ || active_ != this) return Status::failure(Error::NotReady);
+
+  esp_now_unregister_recv_cb();
+  esp_now_unregister_send_cb();
+  esp_now_deinit();
+
+  esp_err_t result = esp_now_init();
+  if (result != ESP_OK) return failure(Error::NotReady, result);
+  if ((result = esp_now_register_recv_cb(receiveCallback)) != ESP_OK ||
+      (result = esp_now_register_send_cb(sendCallback)) != ESP_OK) {
+    esp_now_deinit();
+    return failure(Error::NotReady, result);
+  }
+
+  esp_now_peer_info_t broadcast{};
+  std::memcpy(broadcast.peer_addr, kBroadcast, sizeof(kBroadcast));
+  broadcast.channel = channel_;
+  broadcast.ifidx = WIFI_IF_STA;
+  broadcast.encrypt = false;
+  result = esp_now_add_peer(&broadcast);
+  if (result != ESP_OK && result != ESP_ERR_ESPNOW_EXIST) {
+    esp_now_unregister_recv_cb();
+    esp_now_unregister_send_cb();
+    esp_now_deinit();
+    return failure(result == ESP_ERR_ESPNOW_FULL ? Error::PeerFull : Error::NotReady, result);
+  }
+  return Status::success();
+}
+
 Status EspNowDriver::stop() noexcept {
   if (active_ == this) {
     esp_now_unregister_recv_cb();
@@ -162,7 +193,12 @@ void EspNowDriver::sendCallback(const esp_now_send_info_t* info,
 
 bool EspNowDriver::enqueueFromCallback(const DriverEvent& event) noexcept {
   ++callbackEvents_;
-  const bool accepted = queue_ != nullptr && xQueueSend(queue_, &event, 0) == pdTRUE;
+  const bool receiveCapacityAvailable =
+      event.kind != EventKind::Receive ||
+      (queue_ != nullptr && hal::canAdmitRadioReceiveEvent(
+                                uxQueueMessagesWaiting(queue_), kEventCapacity));
+  const bool accepted = queue_ != nullptr && receiveCapacityAvailable &&
+                        xQueueSend(queue_, &event, 0) == pdTRUE;
   if (!accepted) ++callbackDrops_;
   return accepted;
 }
