@@ -166,6 +166,29 @@ reassociation after a new boot identity at host-test level. GPS, controlled
 Blade restart evidence, induced recoverable/unrecoverable RF loss, clean
 session finalization, and eight physical encrypted peers remain pending.
 
+## Computer GPS and radio endurance for v1.1.0-alpha.1 — 2026-10-15
+
+The Computer ran the release candidate for 20 min 08 s with the NEO-6M in
+continuous `normal` mode at 1 Hz and the local IMU at 200 Hz. The RMS1 artifact
+was validated with `tools/remus-inspect/remus_inspect.py`; stable device and
+recording identities are intentionally omitted.
+
+| Evidence | Result |
+|---|---:|
+| Computer IMU samples | 241,530 |
+| Computer IMU batches | 24,153 |
+| Inferred or explicit IMU gaps | 0 |
+| GPS records | 1,208 |
+| Coherent UBX epochs | 1,207 |
+| GPS stale transitions | 0 |
+| TX callback timeouts | 0 |
+| SD write failures | 0 |
+
+The indoor test intentionally did not qualify positional accuracy because no
+position fix was available. It qualifies continuous receiver output, bounded
+RMS1 storage, uninterrupted 200 Hz acquisition, and the ESP-NOW callback-queue
+reservation/recovery safeguard beyond the earlier failure time of 952 s.
+
 ## M5 GPS software baseline — 2026-10-14
 
 The isolated `feature/m5-gps` branch adds Computer-only NEO-6M capture without

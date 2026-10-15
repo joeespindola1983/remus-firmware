@@ -11,6 +11,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "remus/core/Status.hpp"
+#include "remus/diagnostics/ComputerDiagnosticLogProfile.hpp"
 #include "remus/diagnostics/RotatingTextLog.hpp"
 #include "remus/storage/Rms1Codec.hpp"
 #include "sdmmc_cmd.h"
@@ -36,6 +37,7 @@ struct SdDiagnosticLoggerStats {
   std::uint32_t gpsWritten{0};
   std::uint32_t gpsDropped{0};
   std::uint32_t gpsQueueHighWater{0};
+  std::uint32_t gpsQueueDepth{0};
 };
 
 class SdDiagnosticLogger {
@@ -130,7 +132,8 @@ class SdDiagnosticLogger {
   };
 
   diagnostics::RotatingTextLog log_{{"/sdcard/remus_pc.log",
-                                     "/sdcard/remus_pc.log.1", 512U * 1024U,
+                                     "/sdcard/remus_pc.log.1",
+                                     diagnostics::ComputerDiagnosticLogProfile::segmentBytes,
                                      kLineCapacity - 1, false}};
   sdmmc_card_t* card_{nullptr};
   FILE* rmsFile_{nullptr};

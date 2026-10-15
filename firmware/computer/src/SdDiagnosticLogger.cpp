@@ -339,7 +339,8 @@ SdDiagnosticLoggerStats SdDiagnosticLogger::stats() const noexcept {
           rmsWriteFailures_.load(), rmsCheckpoints_.load(), rmsBytes_.load(),
           diagnosticQueueHighWater_.load(), rmsQueueHighWater_.load(),
           gpsQueued_.load(), gpsWritten_.load(), gpsDropped_.load(),
-          gpsQueueHighWater_.load()};
+          gpsQueueHighWater_.load(),
+          gpsQueue_ == nullptr ? 0U : uxQueueMessagesWaiting(gpsQueue_)};
 }
 
 bool SdDiagnosticLogger::checkpointedThrough(std::uint64_t originId,

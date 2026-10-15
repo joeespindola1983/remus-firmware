@@ -17,6 +17,12 @@ class UbxNavigationDecoder {
   std::uint16_t rejectedConfigurationMask() const noexcept { return rejectedMask_; }
   std::uint16_t measurementRateMs() const noexcept { return measurementRateMs_; }
   std::uint16_t navigationRate() const noexcept { return navigationRate_; }
+  void resetConfigurationEvidence() noexcept {
+    acknowledgedMask_ = 0;
+    rejectedMask_ = 0;
+    measurementRateMs_ = 0;
+    navigationRate_ = 0;
+  }
 
  private:
   enum class State : std::uint8_t { Sync1, Sync2, Class, Id, Length1, Length2, Payload, CkA, CkB };
@@ -42,12 +48,14 @@ class UbxNavigationDecoder {
   DecoderStats stats_{};
 
   NavigationEpoch building_{};
-  NavigationEpoch ready_{};
+  static constexpr std::size_t kReadyCapacity = 8;
+  std::array<NavigationEpoch, kReadyCapacity> ready_{};
+  std::size_t readyHead_{0};
+  std::size_t readySize_{0};
   std::uint32_t positionTowMs_{UINT32_MAX};
   std::uint32_t velocityTowMs_{UINT32_MAX};
   std::uint32_t statusTowMs_{UINT32_MAX};
   std::uint32_t publishedTowMs_{UINT32_MAX};
-  bool readyPending_{false};
   std::uint16_t acknowledgedMask_{0};
   std::uint16_t rejectedMask_{0};
   std::uint16_t measurementRateMs_{0};

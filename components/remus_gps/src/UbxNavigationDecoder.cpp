@@ -93,6 +93,8 @@ std::uint16_t UbxNavigationDecoder::configurationBit(std::uint8_t messageClass,
                                                       std::uint8_t messageId) noexcept {
   if (messageClass == 0x06 && messageId == 0x01) return 1U << 0U;
   if (messageClass == 0x06 && messageId == 0x08) return 1U << 1U;
+  if (messageClass == 0x06 && messageId == 0x11) return 1U << 2U;
+  if (messageClass == 0x06 && messageId == 0x3B) return 1U << 3U;
   return 0;
 }
 
@@ -149,17 +151,25 @@ void UbxNavigationDecoder::publishIfCoherent(
     return;
   building_.gpsTimeOfWeekMs = positionTowMs_;
   building_.receivedAtPcMonotonicUs = receivedAtPcMonotonicUs;
-  if (readyPending_) ++stats_.overwrittenEpochs;
-  ready_ = building_;
-  readyPending_ = true;
+  if (readySize_ == ready_.size()) {
+    // Keep the oldest evidence in order and make overflow observable.
+    ++stats_.overwrittenEpochs;
+    publishedTowMs_ = positionTowMs_;
+    ++stats_.coherentEpochs;
+    return;
+  }
+  const std::size_t tail = (readyHead_ + readySize_) % ready_.size();
+  ready_[tail] = building_;
+  ++readySize_;
   publishedTowMs_ = positionTowMs_;
   ++stats_.coherentEpochs;
 }
 
 bool UbxNavigationDecoder::take(NavigationEpoch& out) noexcept {
-  if (!readyPending_) return false;
-  out = ready_;
-  readyPending_ = false;
+  if (readySize_ == 0) return false;
+  out = ready_[readyHead_];
+  readyHead_ = (readyHead_ + 1) % ready_.size();
+  --readySize_;
   return true;
 }
 

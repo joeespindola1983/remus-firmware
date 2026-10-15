@@ -40,8 +40,8 @@ targets. When `sdkconfig.defaults` changes, remove the generated
 regenerates the effective configuration.
 
 When a FAT-formatted microSD card is present in the Computer, operational events
-are also written to `remus_pc.log`. At 512 KiB it rotates to `remus_pc.log.1`;
-the next rotation replaces the archive, bounding both files to 1 MiB total.
+are also written to `remus_pc.log`. At 16 MiB it rotates to `remus_pc.log.1`;
+the next rotation replaces the archive, bounding both files to 32 MiB total.
 Card absence or write failure does not stop the Computer. This engineering log
 is deliberately separate from session evidence. While a session is active, raw
 local and remote IMU batches are stored in a uniquely named
@@ -78,10 +78,9 @@ failure, or GPS backpressure never pauses local or remote IMU capture. Follow
 [`tests/hardware/runbooks/H4_GPS.md`](tests/hardware/runbooks/H4_GPS.md) before
 promoting the GPS feature branch.
 
-For the H4 development release, serial prints the firmware version, every GPS
-configuration command, fix transitions, stale state, and a five-second GPS
-health summary. When the microSD mounts, `remus_pc.log` additionally receives
-each decoded GPS solution and the detailed configuration/health counters. GPS
+For the H4 development release, serial and `remus_pc.log` report initialization,
+fix/mode transitions, disconnections, and problems. Healthy periodic GPS, IMU,
+and radio snapshots remain silent; continuous evidence belongs in RMS1. GPS
 UART diagnostics continue on serial if the card is absent; RMS1 evidence and
 the internal text log necessarily require a successfully mounted card.
 

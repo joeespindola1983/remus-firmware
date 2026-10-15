@@ -62,7 +62,10 @@ extern "C" void app_main(void) {
     sdLogger.enqueue(remus::computer::DiagnosticLogLevel::Info, "firmware_boot", bootDetails);
     ESP_LOGI(kLogTag,
              "SD diagnostic log ready: /sdcard/remus_pc.log + remus_pc.log.1 "
-             "(1 MiB maximum)");
+             "(%u MiB maximum)",
+             static_cast<unsigned>(
+                 remus::diagnostics::ComputerDiagnosticLogProfile::retentionBytes() /
+                 (1024U * 1024U)));
   }
 
   const remus::Status status = runtime.start();
@@ -157,76 +160,12 @@ extern "C" void app_main(void) {
   }
 
   remus::diagnostics::OperationalProblemCounters previousProblems{};
-  std::uint32_t previousGpsDropped = 0;
   for (;;) {
     const remus::diagnostics::HealthSnapshot health = runtime.healthSnapshot();
     const remus::acquisition::SamplingMetrics imu = acquisitionService.metrics();
     const remus::computer::SdDiagnosticLoggerStats sdLogStats = sdLogger.stats();
     const remus::computer::ComputerRecoveryStats recovery = radioService.recoveryStats();
     const remus::computer::GpsServiceStats gps = gpsService.stats();
-    static char healthDetails[768]{};
-    std::snprintf(healthDetails, sizeof(healthDetails),
-                  "uptime_ms=%llu runtime_starts=%lu queue_overflows=%lu pool_exhaustions=%lu "
-                  "invalid_handle_releases=%lu free_heap=%lu minimum_free_heap=%lu "
-                  "sd_log_queued=%lu sd_log_dropped=%lu sd_log_write_failures=%lu "
-                  "sd_log_rotations=%lu imu_attempts=%llu imu_valid=%llu imu_errors=%llu "
-                  "imu_missed=%llu imu_max_jitter_us=%llu local_batches=%llu "
-                  "rms_queued=%lu rms_written=%lu rms_dropped=%lu rms_write_failures=%lu "
-                  "rms_checkpoints=%lu rms_bytes=%llu sd_log_queue_hwm=%lu rms_queue_hwm=%lu "
-                  "gps_bytes=%llu gps_records_queued=%lu gps_records_written=%lu "
-                  "gps_records_dropped=%lu gps_coherent_epochs=%lu gps_checksum_failures=%lu "
-                  "gps_fix_transitions=%lu gps_queue_hwm=%lu",
-                  static_cast<unsigned long long>(esp_timer_get_time() / 1000),
-                  static_cast<unsigned long>(health.runtimeStarts),
-                  static_cast<unsigned long>(health.queueOverflows),
-                  static_cast<unsigned long>(health.poolExhaustions),
-                  static_cast<unsigned long>(health.invalidHandleReleases),
-                  static_cast<unsigned long>(esp_get_free_heap_size()),
-                  static_cast<unsigned long>(esp_get_minimum_free_heap_size()),
-                  static_cast<unsigned long>(sdLogStats.queued),
-                  static_cast<unsigned long>(sdLogStats.dropped),
-                  static_cast<unsigned long>(sdLogStats.writeFailures),
-                  static_cast<unsigned long>(sdLogStats.rotations),
-                  static_cast<unsigned long long>(imu.attempts),
-                  static_cast<unsigned long long>(imu.validSamples),
-                  static_cast<unsigned long long>(imu.readErrors),
-                  static_cast<unsigned long long>(imu.missedPeriods),
-                  static_cast<unsigned long long>(imu.maxAbsJitterUs),
-                  static_cast<unsigned long long>(acquisitionService.batchCount()),
-                  static_cast<unsigned long>(sdLogStats.rmsQueued),
-                  static_cast<unsigned long>(sdLogStats.rmsWritten),
-                  static_cast<unsigned long>(sdLogStats.rmsDropped),
-                  static_cast<unsigned long>(sdLogStats.rmsWriteFailures),
-                  static_cast<unsigned long>(sdLogStats.rmsCheckpoints),
-                  static_cast<unsigned long long>(sdLogStats.rmsBytes),
-                  static_cast<unsigned long>(sdLogStats.diagnosticQueueHighWater),
-                  static_cast<unsigned long>(sdLogStats.rmsQueueHighWater),
-                  static_cast<unsigned long long>(gps.bytes),
-                  static_cast<unsigned long>(gps.recordsQueued),
-                  static_cast<unsigned long>(sdLogStats.gpsWritten),
-                  static_cast<unsigned long>(sdLogStats.gpsDropped),
-                  static_cast<unsigned long>(gps.coherentEpochs),
-                  static_cast<unsigned long>(gps.checksumFailures),
-                  static_cast<unsigned long>(gps.fixTransitions),
-                  static_cast<unsigned long>(sdLogStats.gpsQueueHighWater));
-    if (sdLogger.isReady() &&
-        !sdLogger.enqueue(remus::computer::DiagnosticLogLevel::Info, "health", healthDetails)) {
-      ESP_LOGW(kLogTag, "SD diagnostic log queue full; entry dropped");
-    }
-    static char recoveryDetails[256]{};
-    std::snprintf(recoveryDetails, sizeof(recoveryDetails),
-                  "ack_frames_queued=%lu checkpoint_acks_queued=%lu "
-                  "replay_requests_queued=%lu duplicate_batches=%lu "
-                  "outside_window_batches=%lu unrecoverable_gaps=%lu",
-                  static_cast<unsigned long>(recovery.ackFramesQueued),
-                  static_cast<unsigned long>(recovery.checkpointAcksQueued),
-                  static_cast<unsigned long>(recovery.replayRequestsQueued),
-                  static_cast<unsigned long>(recovery.duplicateBatches),
-                  static_cast<unsigned long>(recovery.outsideWindowBatches),
-                  static_cast<unsigned long>(recovery.unrecoverableGaps));
-    if (sdLogger.isReady())
-      sdLogger.enqueue(remus::computer::DiagnosticLogLevel::Info, "radio_recovery",
-                       recoveryDetails);
     const remus::diagnostics::OperationalProblemCounters currentProblems{
         health.queueOverflows,
         health.poolExhaustions,
@@ -239,17 +178,23 @@ extern "C" void app_main(void) {
         sdLogStats.rmsWriteFailures,
         recovery.duplicateBatches,
         recovery.outsideWindowBatches,
-        recovery.unrecoverableGaps};
-    static char operationalProblems[384]{};
+        recovery.unrecoverableGaps,
+        gps.checksumFailures,
+        gps.decoderOverflows,
+        sdLogStats.gpsDropped,
+        0,
+        0,
+        0};
+    static char operationalProblems[512]{};
     if (remus::diagnostics::formatNewOperationalProblems(
             previousProblems, currentProblems, operationalProblems,
-            sizeof(operationalProblems)))
+            sizeof(operationalProblems))) {
       ESP_LOGW(kLogTag, "%s", operationalProblems);
+      if (sdLogger.isReady())
+        sdLogger.enqueue(remus::computer::DiagnosticLogLevel::Warning,
+                         "operational_problem", operationalProblems);
+    }
     previousProblems = currentProblems;
-    const std::uint32_t gpsDropped = sdLogStats.gpsDropped;
-    if (gpsDropped > previousGpsDropped)
-      ESP_LOGW(kLogTag, "GPS: record_drop total=%lu", static_cast<unsigned long>(gpsDropped));
-    previousGpsDropped = gpsDropped;
     vTaskDelay(kHealthLogInterval);
   }
 }

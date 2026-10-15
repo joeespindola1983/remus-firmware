@@ -6,6 +6,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "remus/diagnostics/OperationalSerial.hpp"
 
 namespace {
 constexpr char kLogTag[] = "remus_blade";
@@ -41,36 +42,36 @@ extern "C" void app_main(void) {
              static_cast<unsigned long>(acquisitionStatus.detail));
   }
 
+  remus::diagnostics::OperationalProblemCounters previousProblems{};
   for (;;) {
     const remus::diagnostics::HealthSnapshot health = runtime.healthSnapshot();
     const remus::acquisition::SamplingMetrics imu = acquisitionService.metrics();
     const remus::blade::BladeReplayStats replay = radioService.replayStats();
-    ESP_LOGI(kLogTag,
-             "health uptime_ms=%llu runtime_starts=%lu queue_overflows=%lu "
-             "pool_exhaustions=%lu invalid_handle_releases=%lu free_heap=%lu "
-             "minimum_free_heap=%lu imu_attempts=%llu imu_valid=%llu imu_errors=%llu "
-             "imu_missed=%llu imu_max_jitter_us=%llu replay_depth=%lu replay_capacity=%lu "
-             "replay_overflows=%lu ack_windows=%lu replay_queued=%lu replay_unavailable=%lu "
-             "gap_notices=%lu",
-             static_cast<unsigned long long>(esp_timer_get_time() / 1000),
-             static_cast<unsigned long>(health.runtimeStarts),
-             static_cast<unsigned long>(health.queueOverflows),
-             static_cast<unsigned long>(health.poolExhaustions),
-             static_cast<unsigned long>(health.invalidHandleReleases),
-             static_cast<unsigned long>(esp_get_free_heap_size()),
-             static_cast<unsigned long>(esp_get_minimum_free_heap_size()),
-             static_cast<unsigned long long>(imu.attempts),
-             static_cast<unsigned long long>(imu.validSamples),
-             static_cast<unsigned long long>(imu.readErrors),
-             static_cast<unsigned long long>(imu.missedPeriods),
-             static_cast<unsigned long long>(imu.maxAbsJitterUs),
-             static_cast<unsigned long>(replay.depth),
-             static_cast<unsigned long>(replay.capacity),
-             static_cast<unsigned long>(replay.overflows),
-             static_cast<unsigned long>(replay.ackWindows),
-             static_cast<unsigned long>(replay.replayQueued),
-             static_cast<unsigned long>(replay.replayUnavailable),
-             static_cast<unsigned long>(replay.gapNotices));
+    const remus::diagnostics::OperationalProblemCounters currentProblems{
+        health.queueOverflows,
+        health.poolExhaustions,
+        health.invalidHandleReleases,
+        0,
+        0,
+        imu.readErrors,
+        imu.missedPeriods,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        replay.overflows,
+        replay.replayUnavailable,
+        replay.gapNotices};
+    static char operationalProblems[384]{};
+    if (remus::diagnostics::formatNewOperationalProblems(
+            previousProblems, currentProblems, operationalProblems,
+            sizeof(operationalProblems)))
+      ESP_LOGW(kLogTag, "%s", operationalProblems);
+    previousProblems = currentProblems;
     vTaskDelay(kHealthLogInterval);
   }
 }

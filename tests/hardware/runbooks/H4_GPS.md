@@ -32,10 +32,15 @@ Expected serial state lines:
 - `FIRMWARE: role=computer ... version=...` identifying the feature commit;
 - `GPS: START` with UART pins, baud, buffer, and SD/RMS availability;
 - one `GPS: CFG` result for every requested NMEA/UBX message and rate command;
-- `GPS: READY target_rate_hz=1` once after startup;
+- `GPS: READY requested_mode=normal target_rate_hz=1` once after startup;
+- `GPS: MODE mode=normal status=APPLIED` only after receiver ACK and
+  rate readback; a configuration fault falls back to continuous `normal` at 1 Hz;
 - `GPS: NO_FIX` while acquisition is pending, then `GPS: FIX` after lock;
 - `GPS: STALE` only if complete navigation epochs stop for more than 3 s;
-- `GPS: HEALTH` every five seconds with byte/parser/configuration counters;
+- no periodic healthy GPS output; serial and `remus_pc.log` remain quiet after
+  initialization unless fix/mode state changes or a problem counter increases;
+- no `gps_decoder_overflows`, `gps_checksum_failures`, `gps_record_drops`, or
+  `config_fault` problem event throughout the baseline;
 - no coordinate stream in serial; full decoded solutions belong in
   `remus_pc.log` and RMS1.
 
@@ -61,7 +66,8 @@ Required behavior:
 - GPS fix loss does not change radio state or pause RMS recording;
 - `rms_dropped`, `rms_write_failures`, and GPS record drops remain zero;
 - queue high-water marks remain bounded; GPS queue pressure never consumes the
-  IMU/recovery queue.
+  IMU/recovery queue; when `dynamicArmed` is exercised, queue depth 12 or a new
+  GPS record drop must demote the receiver to `normal`;
 
 Do not induce SD removal and RF loss in the same run. Execute the controlled M4
 loss/replay runbook separately so a failure has one interpretable cause.
